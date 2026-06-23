@@ -1,33 +1,73 @@
 # osm-capk — Cluster API + KubeVirt (CAPK) integration for OSM
 
-Forks of OSM components wired to provision **Cluster API + KubeVirt (CAPK)** Kubernetes
-clusters as first-class, OSM-owned clusters via `osm cluster-create`. CAPK runs Cluster API
-on the OSM **management cluster** and creates control-plane/worker nodes as KubeVirt
-`VirtualMachineInstance`s — i.e. virtualization, not bare metal (no Metal3/CAPM3).
+Provision CAPK clusters as OSM-owned clusters via `osm cluster-create`. Cluster API runs on
+the OSM management cluster and creates nodes as KubeVirt VMs.
 
-Validated end-to-end on the reference lab: `osm cluster-create … --vim-account <kubevirt-vim>`
-produces a record with `Created by OSM: YES`, LCM renders a CAPK launcher and submits the
-Argo workflow, and the cluster comes up as KubeVirt VMs.
+Each subdirectory is a fork; the exact diff vs upstream is in [`CHANGES/`](CHANGES):
+`LCM` & `NBI` vs `v19.0`, `osm-krm-functions` vs `master`, `sw-catalogs-osm` vs its pre-CAPK base.
 
-## Components
+## Prerequisites
 
-| Directory | Upstream | What changed |
-|---|---|---|
-| [LCM/](LCM) | osm/LCM | `cluster_mgmt.py` gains a `vim_type == "kubevirt"` branch; new `launcher-create/update-capi-kubevirt-cluster*.j2` |
-| [NBI/](NBI) | osm/NBI | `k8s_topics.py` accepts a `kubevirt` VIM type for `cluster-create` |
-| [osm-krm-functions/](osm-krm-functions) | osm/osm-krm-functions | `create_/update_capi_kubevirt_cluster` KRM functions |
-| [sw-catalogs-osm/](sw-catalogs-osm) | osm sw-catalogs | parameterized CAPI/KubeVirt manifests + Flux templates + fixes |
+Management cluster (k3s tested) + **OSM 19** with Flux + Argo Workflows, plus:
+Cluster API + CAPK (`clusterctl init --infrastructure kubevirt`), KubeVirt, MetalLB.
 
-## Reviewing the changes
+## Steps to replicate
 
-Each subdirectory is the full fork; the precise delta vs upstream is in [`CHANGES/`](CHANGES):
+**1. Management-cluster prerequisites**
+```bash
+# Dedicated MetalLB pool for control-plane LoadBalancers
+kubectl apply -f sw-catalogs-osm/infra-configs/metallb/capi-lb-pool.yaml
+# RBAC for the argo kubeconfig-copy step
+kubectl apply -f sw-catalogs-osm/infra-configs/osm-workflows/templates/capk-kubeconfig-copy-rbac.yaml
+# Disable k3s servicelb so MetalLB serves all LB services (prevents svclb capturing port 6443):
+# add 'servicelb' to k3s --disable, then restart k3s.
+```
 
-- `CHANGES/LCM.patch` — vs `v19.0`
-- `CHANGES/NBI.patch` — vs `v19.0`
-- `CHANGES/osm-krm-functions.patch` — vs `master`
-- `CHANGES/sw-catalogs-osm.patch` — vs the pre-CAPK catalog base
+**2. Host the catalog + KRM functions**
+```bash
+# Push sw-catalogs-osm to the git repo Flux/Argo read (the kubevirt-kubeadm catalog must be served).
+# Inject the KRM functions over the :19 image (no rebuild):
+kubectl create configmap osm-krm-functions-capk-scripts \
+  --from-file=krm-functions.rc=osm-krm-functions/scripts/library/krm-functions.rc \
+  -n osm-workflows --dry-run=client -o yaml | kubectl apply -f -
+```
 
-Integration design and rationale: [`docs/integration-design.md`](docs/integration-design.md).
+**3. Inject the LCM/NBI changes — version-match to the DEPLOYED image**
+The running `lcm`/`nbi` image is usually newer than the git tag, so base the edits on the pods:
+```bash
+# extract the live files
+kubectl exec -n osm <lcm-pod> -c lcm -- cat /usr/lib/python3/dist-packages/osm_lcm/odu_libs/cluster_mgmt.py > cluster_mgmt.py
+kubectl exec -n osm <nbi-pod> -c nbi -- cat /usr/lib/python3/dist-packages/osm_nbi/k8s_topics.py > k8s_topics.py
+# re-apply the CAPK changes from CHANGES/ (cluster_mgmt.py + 2 launcher .j2 for LCM; k8s_topics.py for NBI)
+```
+Then create ConfigMaps from the patched files + the two `launcher-*.j2`, and subPath-mount them
+over the in-pod paths (`.../osm_lcm/odu_libs/cluster_mgmt.py`, `.../odu_libs/templates/<launcher>.j2`,
+`.../osm_nbi/k8s_topics.py`) by patching the `lcm`/`nbi` Deployments; roll out.
 
-> Note: `fleet-osm` (the GitOps deploy repo) is intentionally **not** included here — it
-> holds live cluster secrets (sops/age keys, kubeconfigs).
+**4. Create a connector-less kubevirt VIM**
+```bash
+osm vim-create --name capk-vim --account_type kubevirt \
+  --auth_url http://dummy --user dummy --password dummy --tenant osm
+# VIM lands ERROR (no RO connector) — expected; cluster-create still works.
+```
+
+**5. Create a cluster**
+```bash
+osm cluster-create capk-01 --vim-account capk-vim --node-count 1 --version 1.30.1
+# -> record "Created by OSM: YES" -> LCM submits the CAPK workflow -> Flux -> KubeVirt VMs
+```
+
+**6. Finish provisioning (current manual steps, until automated)**
+```bash
+# a) copy the kubeconfig secret to managed-resources (CNI/post-install need it)
+kubectl get secret capk-01-kubeconfig -n default -o jsonpath='{.data.value}' | base64 -d \
+  | kubectl create secret generic capk-01-kubeconfig -n managed-resources \
+    --from-file=value=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -
+# b) if KCP stays WaitingForKubeadmInit: create the kube-proxy ConfigMap on the workload
+#    cluster, then run the skipped phases on the control-plane VM:
+#    kubeadm init phase {upload-config all, mark-control-plane, bootstrap-token,
+#    kubelet-finalize all, addon coredns}
+```
+
+> Do **not** `osm cluster-register` / `cluster-deregister` these clusters — it rewrites the
+> Flux Kustomization to empty with `prune: true` and destroys the cluster. Use create/delete only.
