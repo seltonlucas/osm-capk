@@ -1,0 +1,115 @@
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+########################################################################################
+
+name: life-cycle-manager
+summary: An image for OSM LCM
+description: |
+  OSM Life Cycle Manager image.
+version: master_beta_1 # version format: <upstream-version>_<base-version>_<version>
+license: Apache-2.0
+base: ubuntu:22.04
+platforms:
+  amd64:
+
+package-repositories:
+  - type: apt
+    components: [main]
+    suites: [kubernetes-xenial]
+    #  curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --import-options show-only --import | grep "^pub" -A1 | head -n2 | tail -1 | xargs
+    key-id: A362B822F6DEDC652817EA46B53DC80D13EDEF05
+    url: https://apt.kubernetes.io/
+
+parts:
+  non-root-user:
+    plugin: nil
+    overlay-script: |
+      chroot ${CRAFT_OVERLAY}
+      mkdir -p /app/osm_lcm
+      mkdir -p /app/storage/kafka
+      mkdir -p /app/log
+      groupadd -g 1001 appuser
+      useradd -u 1001 -g 1001 -d /app appuser
+      chown -R appuser:appuser /app
+
+  common:
+    source: https://osm.etsi.org/gerrit/osm/common.git
+    source-branch: master
+    plugin: python
+    python-requirements:
+      - requirements.txt
+    stage-packages:
+      - python3.10-venv
+    build-environment:
+      - PYTHONDONTWRITEBYTECODE: "1" # This does not work as expected, there is a bug and still not fixed.
+    stage:
+      - -bin/activate
+      - -bin/activate.csh
+      - -bin/activate.fish
+      - -lib/python3.10/site-packages/*/RECORD
+      # Workaround for conflicts related with the bug of PYTHONDONTWRITEBYTECODE
+      - -**/__pycache__/
+
+  helm:
+    plugin: dump
+    source: https://get.helm.sh/helm-v2.17.0-linux-amd64.tar.gz
+    organize:
+      helm: usr/local/bin/helm
+    stage:
+      - usr/local/bin/helm
+
+  helm3:
+    plugin: dump
+    source: https://get.helm.sh/helm-v3.11.3-linux-amd64.tar.gz
+    organize:
+      helm: usr/local/bin/helm3
+    stage:
+      - usr/local/bin/helm3
+
+  n2vc:
+    source: https://osm.etsi.org/gerrit/osm/N2VC.git
+    source-branch: master
+    plugin: python
+    python-requirements:
+      - requirements.txt
+    stage-packages:
+      - python3.10-venv
+      - kubectl=1.26.5-00  # TODO: Do we need to lock the version of kubectl?
+      - openssh-client
+    # NOTE: `ca-certificates` needs to be in overlay-packages for some reason. See:
+    # https://github.com/canonical/rockcraft/issues/334
+    overlay-packages:
+      - ca-certificates
+    build-environment:
+      - PYTHONDONTWRITEBYTECODE: "1" # This does not work as expected, there is a bug and still not fixed.
+    stage:
+      - -bin/activate
+      - -bin/activate.csh
+      - -bin/activate.fish
+      - -lib/python3.10/site-packages/*/RECORD
+      # Workaround for conflicts related with the bug of PYTHONDONTWRITEBYTECODE
+      - -**/__pycache__/
+
+  lcm:
+    plugin: python
+    source: https://osm.etsi.org/gerrit/osm/LCM.git
+    source-branch: master
+    python-requirements:
+      - requirements.txt
+    stage-packages:
+      - python3.10-venv
+      - kubectl=1.26.5-00
+    build-packages:
+      - wget
+      - genisoimage
+      - netbase

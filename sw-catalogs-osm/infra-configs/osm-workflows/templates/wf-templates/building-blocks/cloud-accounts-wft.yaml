@@ -1,0 +1,267 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: cloud-accounts-wft
+  namespace: osm-workflows
+spec:
+  templates:
+
+  # Create a `ProviderConfig` for CrossPlane
+  - name: create-crossplane-providerconfig
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: providerconfig_name
+      ## As of today, one among `azure`, `aws` or `gcp`
+      - name: provider_type
+      ## Final secret to reference from the `ProviderConfig`
+      - name: cred_secret_name
+      ## Temporary secret with secret contents for the workflow
+      ## - If `temp_cred_secret_name` is empty, assumes that the final secret already exists
+      - name: temp_cred_secret_name
+        value: ""
+      - name: temp_cred_secret_key
+        value: "creds"
+      - name: age_public_key_mgmt
+      - name: osm_project_name
+        value: "osm_admin"
+      ## Specific parameters - GCP only
+      - name: target_gcp_project
+        value: ""
+      # Debug?
+      - name: debug
+        value: "false"
+
+      # Other parameters - Do not touch
+      - name: cred_secret_key
+        value: "creds"
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: cred_secret_ns
+        value: "crossplane-system"
+      - name: base_templates_path
+        value: "infra-configs/crossplane/providers"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: CRED_SECRET_CONTENT
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.temp_cred_secret_name}}"
+            key: "{{inputs.parameters.temp_cred_secret_key}}"
+          default: ""
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_crossplane_providerconfig
+      - "{{inputs.parameters.providerconfig_name}}"
+      - "{{inputs.parameters.provider_type}}"
+      - "{{inputs.parameters.cred_secret_name}}"
+      - "{{inputs.parameters.cred_secret_key}}"
+      - "{{inputs.parameters.cred_secret_ns}}"
+      - ''
+      - "{{inputs.parameters.age_public_key_mgmt}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.target_gcp_project}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - "{{inputs.parameters.osm_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+  # Update a `ProviderConfig` for CrossPlane
+  - name: update-crossplane-providerconfig
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: providerconfig_name
+      ## As of today, one among `azure`, `aws` or `gcp`
+      - name: provider_type
+      ## Final secret to reference from the `ProviderConfig`
+      - name: cred_secret_name
+      ## Temporary secret with secret contents for the workflow
+      ## - If `temp_cred_secret_name` is empty, assumes that the final secret already exists
+      - name: temp_cred_secret_name
+        value: ""
+      - name: temp_cred_secret_key
+        value: "creds"
+      - name: age_public_key_mgmt
+      - name: osm_project_name
+        value: "osm_admin"
+      ## Specific parameters - GCP only
+      - name: target_gcp_project
+        value: ""
+      # Debug?
+      - name: debug
+        value: "false"
+
+      # Other parameters - Do not touch
+      - name: cred_secret_key
+        value: "creds"
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: cred_secret_ns
+        value: "crossplane-system"
+      - name: base_templates_path
+        value: "infra-configs/crossplane/providers"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: CRED_SECRET_CONTENT
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.temp_cred_secret_name}}"
+            key: "{{inputs.parameters.temp_cred_secret_key}}"
+          default: ""
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - update_crossplane_providerconfig
+      - "{{inputs.parameters.providerconfig_name}}"
+      - "{{inputs.parameters.provider_type}}"
+      - "{{inputs.parameters.cred_secret_name}}"
+      - "{{inputs.parameters.cred_secret_key}}"
+      - "{{inputs.parameters.cred_secret_ns}}"
+      - ''
+      - "{{inputs.parameters.age_public_key_mgmt}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.target_gcp_project}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - "{{inputs.parameters.osm_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+
+  # Delete a `ProviderConfig` for CrossPlane
+  - name: delete-crossplane-providerconfig
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: providerconfig_name
+      ## As of today, one among `azure`, `aws` or `gcp`
+      - name: provider_type
+      - name: osm_project_name
+        value: "osm_admin"
+      # Debug?
+      - name: debug
+        value: "false"
+
+      # Other parameters - Do not touch
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - delete_crossplane_providerconfig
+      - "{{inputs.parameters.providerconfig_name}}"
+      - "{{inputs.parameters.provider_type}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.osm_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000

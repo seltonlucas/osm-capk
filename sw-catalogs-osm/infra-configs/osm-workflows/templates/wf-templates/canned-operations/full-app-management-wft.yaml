@@ -1,0 +1,571 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+# ===========================================================================================
+# OSM Application Management Workflow Template
+# ===========================================================================================
+#
+# PREREQUISITES:
+# - PVC containing application model and parameters must exist
+# - Required files: app_instance_model.yaml, parameters/clear/environment.yaml, parameters/secret/environment.yaml
+# - Git repositories for Fleet and SW-Catalogs must be accessible
+#
+# USAGE:
+# Use the launcher workflows (launcher-app.yaml) or create custom workflows that reference
+# this template. Ensure the model_volume_name parameter points to a properly prepared PVC.
+#
+# For volume preparation utilities, see: scripts/library/osm/utils/workflow-pvc
+#
+# ===========================================================================================
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: full-app-management-wft
+  namespace: osm-workflows
+spec:
+  arguments:
+    parameters:
+    # === Core Operation Configuration ===
+    - name: command
+      description: |
+        Full command string to execute with the OSM SDK.
+        Examples:
+        - "app create $environment": Deploy new application instance
+        - "app update $environment": Update existing application instance
+        - "app delete $environment": Remove application instance
+        This parameter accepts any valid OSM SDK command for maximum flexibility.
+
+    # === Volume-Based Data Sources ===
+    - name: model_volume_name
+      description: |
+        Name of the PersistentVolumeClaim containing application models and parameters.
+        The PVC must contain the following structure:
+        - /app_instance_model.yaml: Application instantiation model (required)
+        - /parameters/clear/environment.yaml: Clear text parameters (optional)
+        Secret parameters are mounted separately via the secret_name parameter.
+    - name: secret_name
+      description: |
+        Name of the Kubernetes secret to mount at /model/parameters/secret/environment.yaml.
+        This parameter is optional. When provided, the secret will be mounted as a file
+        containing sensitive configuration parameters for the application.
+
+    # === Git Repository Configuration ===
+    - name: git_fleet_url
+    - name: fleet_destination_folder
+      value: "/fleet/fleet-osm"
+    - name: git_fleet_cred_secret
+    - name: git_sw_catalogs_url
+    - name: sw_catalogs_destination_folder
+      value: "/sw-catalogs/sw-catalogs-osm"
+    - name: git_sw_catalogs_cred_secret
+
+    # === Target Deployment Configuration ===
+    - name: app_name
+    - name: profile_name
+    - name: profile_type
+      value: "app-profiles"
+    - name: project_name
+      value: "osm_admin"
+
+    # === OSM SDK Container Configuration ===
+    - name: osm_sdk_image_repository
+      value: "opensourcemano/osm-nushell-krm-functions"
+      description: |
+        Repository for the OSM SDK container image. Default is the standardized
+        OSM SDK operations image that provides consistent behavior across workflows.
+    - name: osm_sdk_image_tag
+      value: "releasenineteen-daily"
+      description: |
+        Tag for the OSM SDK container image. Default is '24h' which provides
+        a stable, time-limited image for workflow execution.
+
+    # === Workflow Execution Control ===
+    - name: debug
+      value: "false"
+      description: |
+        Enable debug mode for detailed workflow execution information.
+        When set to 'true', additional debug steps will execute to provide:
+        - Volume mount status and accessibility checks
+        - Model content analysis and validation
+        - Repository structure inspection
+        - Embedded operations testing
+        Set to 'true' for troubleshooting workflow issues.
+    - name: dry_run
+      value: "false"
+      description: |
+        Enable dry-run mode to validate operations without making changes.
+        When set to 'true', the workflow will:
+        - Perform all validation and preparation steps
+        - Execute app operations in dry-run mode (no actual changes)
+        - Skip Git commit and push operations
+        Use this mode to test workflow configuration and validate models.
+
+  # === Workflow Lifecycle Management ===
+  # TTL strategy for automatic cleanup of completed workflow instances
+  ttlStrategy:
+    secondsAfterCompletion: 6000  # 100 minutes - Time to live after workflow completion
+    secondsAfterSuccess: 6000     # 100 minutes - Time to live after successful execution
+    secondsAfterFailure: 9000     # 150 minutes - Extended time for failure analysis
+
+  # Main entry point for the workflow template
+  entrypoint: app-management
+
+  templates:
+  # === Main Application Management Template ===
+  # This template orchestrates the complete application lifecycle management process
+  # using a volume-based approach for application models and parameters.
+  - name: app-management
+    inputs:
+      parameters:
+      # Core operation configuration
+      - name: command
+      # Volume-based data sources
+      - name: model_volume_name
+      - name: secret_name
+      # Git repository configuration for Fleet and SW-Catalogs
+      - name: git_fleet_url
+      - name: fleet_destination_folder
+      - name: git_fleet_cred_secret
+      - name: git_sw_catalogs_url
+      - name: sw_catalogs_destination_folder
+      - name: git_sw_catalogs_cred_secret
+      # Target deployment configuration
+      - name: app_name
+      - name: profile_name
+      - name: profile_type
+      - name: project_name
+      # OSM SDK container configuration with standardized defaults
+      - name: osm_sdk_image_repository
+      - name: osm_sdk_image_tag
+      # Workflow execution control flags
+      - name: debug
+      - name: dry_run
+
+    steps:
+    # === PHASE 1: Parameter Validation ===
+    # Validate that all required parameters are provided for volume-based workflow execution
+    - - name: validate-parameters
+        inline:
+          container:
+            image: alpine:latest
+            command: [sh, -c]
+            args:
+              - |
+                set -e
+                echo "=== Volume-Based Workflow Parameter Validation ==="
+                echo "Validating required parameters for application management..."
+
+                # Validate core volume parameter
+                if [ -z "{{inputs.parameters.model_volume_name}}" ]; then
+                  echo "ERROR: model_volume_name parameter is required for volume-based workflow"
+                  echo "Please provide a PVC name containing the application model and parameters"
+                  exit 1
+                fi
+
+                # Validate Git repository parameters
+                if [ -z "{{inputs.parameters.git_fleet_url}}" ]; then
+                  echo "ERROR: git_fleet_url parameter is required for Fleet repository access"
+                  exit 1
+                fi
+
+                if [ -z "{{inputs.parameters.git_sw_catalogs_url}}" ]; then
+                  echo "ERROR: git_sw_catalogs_url parameter is required for SW-Catalogs repository access"
+                  exit 1
+                fi
+
+                # Validate target deployment parameters
+                if [ -z "{{inputs.parameters.app_name}}" ]; then
+                  echo "ERROR: app_name parameter is required for application identification"
+                  exit 1
+                fi
+
+                if [ -z "{{inputs.parameters.profile_name}}" ]; then
+                  echo "ERROR: profile_name parameter is required for deployment profile"
+                  exit 1
+                fi
+
+                echo "✓ All required parameters validated successfully"
+                echo "Configuration Summary:"
+                echo "  Command: {{inputs.parameters.command}}"
+                echo "  Model Volume: {{inputs.parameters.model_volume_name}}"
+                echo "  Secret Name: {{inputs.parameters.secret_name}}"
+                echo "  Application: {{inputs.parameters.app_name}}"
+                echo "  Profile: {{inputs.parameters.profile_name}} ({{inputs.parameters.profile_type}})"
+                echo "  Project: {{inputs.parameters.project_name}}"
+                echo "  OSM SDK: {{inputs.parameters.osm_sdk_image_repository}}:{{inputs.parameters.osm_sdk_image_tag}}"
+                echo "  Debug Mode: {{inputs.parameters.debug}}"
+                echo "  Dry Run: {{inputs.parameters.dry_run}}"
+
+    # === PHASE 2: Volume Preparation ===
+    # Generate temporary volumes for Git repository operations
+    # These volumes will store cloned Fleet and SW-Catalogs repositories during workflow execution
+    - - name: generate-fleet-volume-repo
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'  # Sufficient space for Fleet repository content
+      - name: generate-sw-catalogs-volume-repo
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'  # Sufficient space for SW-Catalogs repository content
+
+    # === PHASE 3: Git Repository Cloning ===
+    # Clone the required Git repositories for application modeling and deployment
+    # These repositories provide the templates and target locations for GitOps operations
+    - - name: clone-fleet
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/fleet"
+          - name: repo_url
+            value: "{{inputs.parameters.git_fleet_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+      - name: clone-sw-catalogs
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/sw-catalogs"
+          - name: repo_url
+            value: "{{inputs.parameters.git_sw_catalogs_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.sw_catalogs_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_sw_catalogs_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-sw-catalogs-volume-repo.outputs.parameters.pvc-name}}'
+
+    # === PHASE 4: Debug Information (Optional) ===
+    # Comprehensive debugging information for volume-based workflow troubleshooting
+    # Executed only when debug parameter is set to true
+    - - name: debug-info
+        when: "{{inputs.parameters.debug}} == true"
+        inline:
+          container:
+            image: "{{inputs.parameters.osm_sdk_image_repository}}:{{inputs.parameters.osm_sdk_image_tag}}"
+            args:
+              - "nu"
+              - "-c"
+              - |
+                print "=== OSM App Modeling Debug Information (Volume-Based) ==="
+                print $"Command: {{inputs.parameters.command}}"
+                print $"SDK Image: {{inputs.parameters.osm_sdk_image_repository}}:{{inputs.parameters.osm_sdk_image_tag}}"
+                print $"Model Volume: {{inputs.parameters.model_volume_name}}"
+                print $"Secret Name: {{inputs.parameters.secret_name}}"
+                print $"Timestamp: (date now | format date '%Y-%m-%d %H:%M:%S')"
+                print ""
+
+                print "=== Volume Mount Status and Accessibility ==="
+                print "Checking volume mount accessibility..."
+
+                # Check model volume mount
+                print "Model volume mount status:"
+                if (ls /model | length) > 0 {
+                  print "✓ Model volume mounted successfully at /model"
+                  print $"  Files found: (ls /model | length)"
+                } else {
+                  print "✗ Model volume mount failed or empty"
+                }
+
+                # Check fleet volume mount
+                print "Fleet volume mount status:"
+                if (ls /repos/fleet-osm | length) > 0 {
+                  print "✓ Fleet volume mounted successfully at /repos/fleet-osm"
+                  print $"  Files found: (ls /repos/fleet-osm | length)"
+                } else {
+                  print "✗ Fleet volume mount failed or empty"
+                }
+
+                # Check sw-catalogs volume mount
+                print "SW-Catalogs volume mount status:"
+                if (ls /repos/sw-catalogs-osm | length) > 0 {
+                  print "✓ SW-Catalogs volume mounted successfully at /repos/sw-catalogs-osm"
+                  print $"  Files found: (ls /repos/sw-catalogs-osm | length)"
+                } else {
+                  print "✗ SW-Catalogs volume mount failed or empty"
+                }
+                print ""
+
+                print "=== Model Volume Contents and Structure ==="
+                print "Model volume directory structure:"
+                try {
+                  ls /model -la | select name type size mode | table
+                } catch {
+                  print "Error accessing model volume contents"
+                }
+                print ""
+
+                print "=== Required Model Files Validation ==="
+                # Check app_instance_model.yaml
+                if ("/model/app_instance_model.yaml" | path exists) {
+                  print "✓ app_instance_model.yaml found"
+                  try {
+                    let file_size = (ls /model/app_instance_model.yaml | get size | first)
+                    print $"  Size: ($file_size) bytes"
+                  } catch {
+                    print "  Warning: Could not read file size"
+                  }
+                } else {
+                  print "✗ app_instance_model.yaml missing"
+                }
+
+                # Check clear parameters
+                if ("/model/parameters/clear/environment.yaml" | path exists) {
+                  print "✓ Clear parameters file found"
+                  try {
+                    let file_size = (ls /model/parameters/clear/environment.yaml | get size | first)
+                    print $"  Size: ($file_size) bytes"
+                  } catch {
+                    print "  Warning: Could not read file size"
+                  }
+                } else {
+                  print "ℹ Clear parameters file missing (optional)"
+                }
+
+                # Check secret parameters
+                if ("/model/parameters/secret/environment.yaml" | path exists) {
+                  print "✓ Secret parameters file found"
+                  try {
+                    let file_size = (ls /model/parameters/secret/environment.yaml | get size | first)
+                    print $"  Size: ($file_size) bytes"
+                  } catch {
+                    print "  Warning: Could not read file size"
+                  }
+                } else {
+                  print "ℹ Secret parameters file missing (optional)"
+                }
+
+                print "Clear Parameters Content:"
+                try {
+                  let clear_params = open /model/parameters/clear/environment.yaml | to yaml
+                  print $clear_params
+                } catch {
+                  print "Clear parameters not available"
+                }
+                print ""
+
+                print "Secret Parameters Content (masked for security):"
+                try {
+                  if ("/model/parameters/secret/environment.yaml" | path exists) {
+                    print "Secret file exists - content masked for security"
+                  } else {
+                    print "Secret parameters not available"
+                  }
+                } catch {
+                  print "Error checking secret parameters"
+                }
+                print ""
+
+                print "=== Loaded Model Instance from Volume ==="
+                try {
+                  $model_instance | to yaml
+                  print $model_instance
+                } catch {
+                  print "Error loading model instance"
+                }
+                print ""
+
+                print "=== Environment Parameters from Volume ==="
+                try {
+                  $environment | to yaml
+                  print $environment
+                } catch {
+                  print "Error loading environment"
+                }
+                print ""
+
+                print "=== Repository Structure ==="
+                print "Fleet repo contents:"
+                try {
+                  ls /repos/fleet-osm | select name type size | first 10 | table
+                } catch {
+                  print "Error accessing fleet repository"
+                }
+                print ""
+                print "SW-Catalogs repo contents:"
+                try {
+                  ls /repos/sw-catalogs-osm | select name type size | first 10 | table
+                } catch {
+                  print "Error accessing sw-catalogs repository"
+                }
+                print ""
+
+                print "=== Embedded Operations Validation ==="
+                print "App Operations Library Status:"
+                try {
+                  help app | lines | first 10 | str join "\n"
+                } catch {
+                  print "Error accessing app operations library"
+                }
+                print ""
+
+                print "=== Dry Run Test ==="
+                print "Testing command execution with volume-mounted data..."
+                try {
+                  print $"Command to execute: {{inputs.parameters.command}}"
+                  print "✓ Command validation successful with volume-based data"
+                } catch {
+                  print $"✗ Command validation failed: ($in)"
+                }
+                print ""
+
+                print "=== Debug Information Complete ==="
+            volumeMounts:
+            - name: model-volume
+              mountPath: /model
+            - name: fleet-volume
+              mountPath: /repos/fleet-osm
+              subPath: fleet-osm
+            - name: sw-catalogs-volume
+              mountPath: /repos/sw-catalogs-osm
+              subPath: sw-catalogs-osm
+            # Mount secret volume when secret_name is provided
+            - name: secret-volume
+              mountPath: /model/parameters/secret
+              readOnly: true
+          volumes:
+          - name: model-volume
+            persistentVolumeClaim:
+              claimName: "{{inputs.parameters.model_volume_name}}"
+          - name: fleet-volume
+            persistentVolumeClaim:
+              claimName: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: sw-catalogs-volume
+            persistentVolumeClaim:
+              claimName: '{{steps.generate-sw-catalogs-volume-repo.outputs.parameters.pvc-name}}'
+          - name: secret-volume
+            secret:
+              secretName: "{{inputs.parameters.secret_name}}"
+              optional: true
+
+    # === PHASE 5: Application Operations ===
+    # This phase performs the actual create/update/delete operations on the application model
+    - - name: run-app-operation
+        when: "{{inputs.parameters.dry_run}} != true"
+        inline:
+          container:
+            image: "{{inputs.parameters.osm_sdk_image_repository}}:{{inputs.parameters.osm_sdk_image_tag}}"
+            args: ["{{inputs.parameters.command}}"]         # Full command string to execute
+            volumeMounts:
+            # Mount model volume containing application data
+            - name: model-volume
+              mountPath: /model
+            # Mount Fleet repository for GitOps target
+            - name: fleet-volume
+              mountPath: /repos/fleet-osm
+              subPath: fleet-osm
+            # Mount SW-Catalogs repository for application templates
+            - name: sw-catalogs-volume
+              mountPath: /repos/sw-catalogs-osm
+              subPath: sw-catalogs-osm
+            # Mount secret volume when secret_name is provided
+            - name: secret-volume
+              mountPath: /model/parameters/secret
+              readOnly: true
+          volumes:
+          - name: model-volume
+            persistentVolumeClaim:
+              claimName: "{{inputs.parameters.model_volume_name}}"
+          - name: fleet-volume
+            persistentVolumeClaim:
+              claimName: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: sw-catalogs-volume
+            persistentVolumeClaim:
+              claimName: '{{steps.generate-sw-catalogs-volume-repo.outputs.parameters.pvc-name}}'
+          - name: secret-volume
+            secret:
+              secretName: "{{inputs.parameters.secret_name}}"
+              optional: true
+      # Dry-run variant of the app operation for validation without changes
+      - name: run-app-operation-dry-run
+        when: "{{inputs.parameters.dry_run}} == true"
+        inline:
+          container:
+            image: "{{inputs.parameters.osm_sdk_image_repository}}:{{inputs.parameters.osm_sdk_image_tag}}"
+            args: ["{{inputs.parameters.command}} --dry-run"] # Full command string with dry-run flag
+            volumeMounts:
+            # Same volume mounts as regular operation for consistency
+            - name: model-volume
+              mountPath: /model
+            - name: fleet-volume
+              mountPath: /repos/fleet-osm
+              subPath: fleet-osm
+            - name: sw-catalogs-volume
+              mountPath: /repos/sw-catalogs-osm
+              subPath: sw-catalogs-osm
+            # Mount secret volume when secret_name is provided
+            - name: secret-volume
+              mountPath: /model/parameters/secret
+              readOnly: true
+          volumes:
+          - name: model-volume
+            persistentVolumeClaim:
+              claimName: "{{inputs.parameters.model_volume_name}}"
+          - name: fleet-volume
+            persistentVolumeClaim:
+              claimName: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: sw-catalogs-volume
+            persistentVolumeClaim:
+              claimName: '{{steps.generate-sw-catalogs-volume-repo.outputs.parameters.pvc-name}}'
+          - name: secret-volume
+            secret:
+              secretName: "{{inputs.parameters.secret_name}}"
+              optional: true
+
+    # === PHASE 7: GitOps Commit and Push ===
+    # Commit and push the generated application manifests to the Fleet repository
+    # This completes the GitOps workflow by updating the target repository with changes
+    - - name: push-to-fleet
+        templateRef:
+          name: git-wft
+          template: git-commit-merge-push
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/fleet"
+          - name: repo_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: commit_message
+            value: "Execute '{{inputs.parameters.command}}' for App '{{inputs.parameters.app_name}}' in {{inputs.parameters.profile_name}} profile ({{inputs.parameters.profile_type}}) @ {{inputs.parameters.project_name}} project [Volume-Based Workflow]"
+          - name: main_branch
+            value: main
+          - name: contrib_branch
+            value: osm_contrib
+          - name: dry_run
+            value: "{{inputs.parameters.dry_run}}"

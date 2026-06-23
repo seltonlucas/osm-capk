@@ -1,0 +1,67 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+---
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: Cluster
+metadata:
+  name: ${cluster_resource_name}-cluster
+  annotations:
+    crossplane.io/external-name: ${cluster_name}
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+    type: cluster
+spec:
+  forProvider:
+    region: ${cluster_location}
+    version: ${k8s_version}
+    roleArnSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: cluster
+    vpcConfig:
+      - endpointPrivateAccess: true
+        endpointPublicAccess: true
+        subnetIdSelector:
+          matchLabels:
+            provider: aws
+            cluster: ${cluster_resource_name}
+            type: subnet
+            access: private
+  publishConnectionDetailsTo:
+    name: kubeconfig-${cluster_resource_name}
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: ClusterAuth
+metadata:
+  name: ${cluster_resource_name}-clusterauth
+spec:
+  forProvider:
+    region: ${cluster_location}
+    clusterName: ${cluster_name}
+  writeConnectionSecretToRef:
+    namespace: managed-resources
+    name: kubeconfig-${cluster_resource_name}
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}

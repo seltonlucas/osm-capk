@@ -1,0 +1,180 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: full-clone-ksu-wtf
+  namespace: osm-workflows
+spec:
+  arguments:
+    parameters:
+    # Fleet repo
+    - name: git_fleet_url
+    - name: fleet_destination_folder
+    - name: git_fleet_cred_secret
+    # Specific parameters - Source and destination KSU
+    ## Source KSU:
+    - name: source_ksu_name
+    - name: source_profile_name
+    - name: source_profile_type
+    - name: source_project_name
+      value: "osm_admin"
+    ## Destination KSU:
+    ## - If any of the destination parameters are not specified, it will assume
+    ##   they are the same as in source.
+    ## - It will reject if all are empty or equal to source, to avoid cloning a KSU over itself
+    - name: destination_ksu_name
+      value: ""
+    - name: destination_profile_name
+      value: ""
+    - name: destination_profile_type
+      value: ""
+    - name: destination_project_name
+      value: ""
+    # Debug/dry run?
+    - name: debug
+      value: "false"
+    - name: dry_run
+      value: "false"
+
+  # Cleanup policy
+  ttlStrategy:
+    secondsAfterCompletion: 6000  # Time to live after workflow is completed, replaces ttlSecondsAfterFinished
+    secondsAfterSuccess: 6000     # Time to live after workflow is successful
+    secondsAfterFailure: 9000     # Time to live after workflow fails
+
+  entrypoint: clone-ksu
+
+  templates:
+  # Main template
+  - name: clone-ksu
+    inputs:
+      parameters:
+      # Fleet repo
+      - name: git_fleet_url
+      - name: fleet_destination_folder
+      - name: git_fleet_cred_secret
+      # Specific parameters - Source and destination KSU
+      ## Source KSU:
+      - name: source_ksu_name
+      - name: source_profile_name
+      - name: source_profile_type
+      - name: source_project_name
+      ## Destination KSU:
+      - name: destination_ksu_name
+      - name: destination_profile_name
+      - name: destination_profile_type
+      - name: destination_project_name
+      # Debug/dry run?
+      - name: debug
+      - name: dry_run
+
+    steps:
+    # ------ Preparations for transaction
+    - - name: generate-fleet-volume-repo
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'
+      - name: generate-sw-catalogs-volume-repo
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'
+    - - name: clone-fleet
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/fleet"
+          - name: repo_url
+            value: "{{inputs.parameters.git_fleet_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+    # ------ end of preparations for transaction
+
+    # ------ Transformations
+    - - name: clone-ksu
+        templateRef:
+          name: ksu-management-wft
+          template: clone-ksu
+        arguments:
+          parameters:
+          # References to required external resources
+          - name: fleet_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          # Specific parameters - Source and destination KSU
+          ## Source KSU:
+          - name: source_ksu_name
+            value: "{{inputs.parameters.source_ksu_name}}"
+          - name: source_profile_name
+            value: "{{inputs.parameters.source_profile_name}}"
+          - name: source_profile_type
+            value: "{{inputs.parameters.source_profile_type}}"
+          - name: source_project_name
+            value: "{{inputs.parameters.source_project_name}}"
+          ## Destination KSU:
+          - name: destination_ksu_name
+            value: "{{inputs.parameters.destination_ksu_name}}"
+          - name: destination_profile_name
+            value: "{{inputs.parameters.destination_profile_name}}"
+          - name: destination_profile_type
+            value: "{{inputs.parameters.destination_profile_type}}"
+          - name: destination_project_name
+            value: "{{inputs.parameters.destination_project_name}}"
+          # Debug?
+          - name: debug
+            value: "{{inputs.parameters.debug}}"
+    # ------ end of transformations
+
+    # ------ Commit transaction
+    - - name: push-to-fleet
+        templateRef:
+          name: git-wft
+          template: git-commit-merge-push
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/fleet"
+          - name: repo_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: commit_message
+            value: "Clone KSU {{inputs.parameters.source_ksu_name}} at {{inputs.parameters.source_profile_name}} profile of {{inputs.parameters.source_profile_type}} type @ {{inputs.parameters.source_project_name}} project as {{inputs.parameters.destination_ksu_name}} KSU at {{inputs.parameters.destination_profile_name}} profile of {{inputs.parameters.destination_profile_type}} type @ {{inputs.parameters.destination_project_name}}"
+          - name: main_branch
+            value: main
+          - name: contrib_branch
+            value: osm_contrib
+          - name: dry_run
+            value: "{{inputs.parameters.dry_run}}"
+# ------ end of commit transaction

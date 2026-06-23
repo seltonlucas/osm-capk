@@ -1,0 +1,92 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+---
+# TEMPLATE_PARAMETERS:
+# ===================
+#
+# CLUSTER_KUSTOMIZATION_NAME: Name of the Kustomization in the management cluster representing the AKS cluster.
+# - Alternatively, it can be patched at:
+#   .metadata.name
+#   .metadata.labels.cluster
+#   .spec.commonMetadata.labels.cluster
+#
+# PARAMETERS TO PATCH:
+# ===================
+#
+# .spec.postBuild.substitute.providerconfig_name: Name of the Azure ProviderConfig to use to create the AKS cluster.
+# .spec.postBuild.substitute.cluster_name: Name of the cluster in the target cloud. It may differ from `CLUSTER_KUSTOMIZATION_NAME` since naming restrictions are often different from K8s resource naming restrictions (e.g., hyphens vs. underscores).
+# .spec.postBuild.substitute.k8s_version: Kubernetes version.
+# .spec.postBuild.substitute.node_count: Number of worker nodes.
+# .spec.postBuild.substitute.vm_size: Flavor of worker node VMs.
+# .spec.postBuild.substitute.cluster_location: Target cluster region.
+# .spec.postBuild.substitute.rg_name: Target Resource Group.
+
+# Cluster resource
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}
+  namespace: managed-resources
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  commonMetadata:
+    labels:
+      cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+  interval: 1h
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/aks/manifests
+  prune: true
+  wait: true
+  # force: true
+  patches:
+    - patch: |-
+        apiVersion: containerservice.azure.upbound.io/v1beta1
+        kind: KubernetesCluster
+        metadata:
+          name: ${cluster_resource_name}
+        spec:
+          forProvider:
+            # Comment for latest version (creation only):
+            kubernetesVersion: "${k8s_version}"
+
+            defaultNodePool:
+            - name: default
+              # nodeCount: 1  # Edit to change no. workers
+              nodeCount: ${node_count}
+
+              # Comment for latest version (creation only):
+              orchestratorVersion: "${k8s_version}"
+              vmSize: ${vm_size}
+  # Input parameters
+  postBuild:
+    substitute:
+      providerconfig_name: default
+      cluster_resource_name: ${CLUSTER_KUSTOMIZATION_NAME}
+      cluster_name: myakscluster01
+      k8s_version: "'1.27'"
+      node_count: "1"
+      vm_size: Standard_D2_v2
+      cluster_location: West Europe
+      # AKS only
+      rg_name: CloudNative-OSM

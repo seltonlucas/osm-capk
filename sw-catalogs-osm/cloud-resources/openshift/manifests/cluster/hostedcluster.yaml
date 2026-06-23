@@ -1,0 +1,69 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: hypershift.openshift.io/v1beta1
+kind: HostedCluster
+metadata:
+  name: ${cluster_name}
+  namespace: ${hosted_cluster_project}
+  labels:
+    cluster: ${cluster_name}
+    "cluster.open-cluster-management.io/clusterset": "default"
+spec:
+  etcd:
+    managed:
+      storage:
+        persistentVolume:
+          size: "${etcd_volume_size}"
+          storageClassName: ${storage_class}
+        type: PersistentVolume
+    managementType: Managed
+  release:
+    image: "quay.io/openshift-release-dev/ocp-release:${openshift_release}"
+  pullSecret:
+    name: "pullsecret-cluster-${cluster_name}"
+  sshKey:
+    name: "sshkey-cluster-${cluster_name}"
+  networking:
+    clusterNetwork:
+      - cidr: 10.132.0.0/14
+    serviceNetwork:
+      - cidr: 172.31.0.0/16
+    networkType: OVNKubernetes
+  controllerAvailabilityPolicy: ${control_plane_availability}
+  infrastructureAvailabilityPolicy: ${control_plane_availability}
+  platform:
+    type: KubeVirt
+    kubevirt:
+      baseDomainPassthrough: true
+  infraID: ${cluster_name}
+  services:
+    - service: OAuthServer
+      servicePublishingStrategy:
+        type: Route
+    - service: OIDC
+      servicePublishingStrategy:
+        type: Route
+    - service: Konnectivity
+      servicePublishingStrategy:
+        type: Route
+    - service: Ignition
+      servicePublishingStrategy:
+        type: Route
+    - service: APIServer
+      servicePublishingStrategy:
+        type: LoadBalancer

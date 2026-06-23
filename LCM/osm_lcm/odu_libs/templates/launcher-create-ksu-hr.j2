@@ -1,0 +1,122 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: {{ workflow_name }}
+spec:
+  arguments:
+    parameters:
+    # Fleet repo
+    - name: git_fleet_url
+      value: "{{ git_fleet_url }}"
+    - name: fleet_destination_folder
+      value: "/fleet/fleet-osm"
+    - name: git_fleet_cred_secret
+      value: fleet-repo
+    # SW-Catalogs repo
+    - name: git_sw_catalogs_url
+      value: "{{ git_sw_catalogs_url }}"
+    - name: sw_catalogs_destination_folder
+      value: "/sw-catalogs/sw-catalogs-osm"
+    - name: git_sw_catalogs_cred_secret
+      value: sw-catalogs
+    # Specific parameters - Base KSU generation from template
+    ## Relative path from "SW Catalogs" repo root
+    - name: templates_path
+      value: "{{ templates_path }}"
+    ## Should substitute environment variables in the template?
+    - name: substitute_environment
+      value: "{{ substitute_environment }}"
+    ## Filter for substitution of environment variables
+    - name: substitution_filter
+      value: "{{ substitution_filter }}"
+    ## Custom environment variables (formatted as .env), to be used for template parametrization
+    - name: custom_env_vars
+      value: {{ custom_env_vars }}
+      # value: |
+      #     KEY1=value1
+      #     KEY2=value2
+    # Specific parameters - Patch HelmRelease in KSU with inline values
+    - name: kustomization_name
+      value: "{{ kustomization_name }}"
+    - name: helmrelease_name
+      value: "{{ helmrelease_name }}"
+    - name: inline_values
+      # Install some Jenkins plugins:
+      value: {{ inline_values }}
+    # Specific parameters - Secret generation
+    - name: is_preexisting_secret
+      value: "{{ is_preexisting_secret }}"
+    - name: target_ns
+      value: "{{ target_ns }}"
+    - name: age_public_key
+      value: "{{ age_public_key }}"
+    - name: values_secret_name
+      value: "{{ values_secret_name }}"
+    - name: secret_key
+      value: "values.yaml"
+    ################################################################
+    # This temporary secret should exist already in the `osm-workflows`
+    # namespace and contain the desired secret values in a well-known key
+    # (in the example, `creds`).
+    #
+    # For instance:
+    #
+    # creds: |
+    #     jenkinsUser: admin
+    #     jenkinsPassword: myJ3nk1n2P2ssw0rd
+    - name: reference_secret_for_values
+      value: "{{ reference_secret_for_values }}"
+    - name: reference_key_for_values
+      value: "{{ reference_key_for_values }}"
+    # Specific parameters - Configmap generation
+    - name: is_preexisting_cm
+      value: "{{ is_preexisting_cm }}"
+    - name: values_cm_name
+      value: "{{ values_configmap_name }}"
+    - name: cm_key
+      value: "{{ cm_key }}"
+    - name: cm_values
+      value: {{ cm_values }}
+      # value: |
+      #   cm-key1: cm-value1
+      #   cm-key2: cm-value2
+    # Specific parameters - KSU rendering
+    - name: ksu_name
+      value: "{{ ksu_name }}"
+    - name: profile_name
+      value: "{{ profile_name }}"
+    - name: profile_type
+      value: "{{ profile_type }}"
+    - name: project_name
+      value: "{{ osm_project_name }}"
+    - name: sync
+      value: "{{ sync }}"
+    # Debug/dry run?
+    - name: debug
+      value: "{{ workflow_debug }}"
+    - name: dry_run
+      value: "{{ workflow_dry_run }}"
+
+  # Cleanup policy
+  ttlStrategy:
+    secondsAfterSuccess: 1800     # Time to live after workflow is successful
+    secondsAfterFailure: 7200     # Time to live after workflow fails
+
+  workflowTemplateRef:
+    name: full-create-ksu-hr-wtf

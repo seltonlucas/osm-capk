@@ -1,0 +1,76 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: ${cluster_resource_name}-cluster
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+spec:
+  forProvider:
+    policyArn: arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+    roleSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: cluster
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: ${cluster_resource_name}-service
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+spec:
+  forProvider:
+    policyArn: arn:aws:iam::aws:policy/AmazonEKSServicePolicy
+    roleSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: cluster
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: ${cluster_resource_name}-vpccontroller
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+spec:
+  forProvider:
+    policyArn: arn:aws:iam::aws:policy/AmazonEKSVPCResourceController
+    roleSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: cluster
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}

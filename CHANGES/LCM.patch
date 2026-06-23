@@ -1,0 +1,503 @@
+diff --git a/osm_lcm/odu_libs/cluster_mgmt.py b/osm_lcm/odu_libs/cluster_mgmt.py
+index b4a24d6..79c751f 100644
+--- a/osm_lcm/odu_libs/cluster_mgmt.py
++++ b/osm_lcm/odu_libs/cluster_mgmt.py
+@@ -85,14 +85,20 @@ async def create_cluster(self, op_id, op_params, content):
+         skip_bootstrap = "false"
+     else:
+         skip_bootstrap = "true"
+-    if vim_type == "azure":
++    # CAPK/KubeVirt clusters are provisioned by Cluster API on the OSM management
++    # cluster itself (as KubeVirt VMs), not on an external cloud, so they use a
++    # dedicated launcher + workflow. cluster_type is informational here.
++    if vim_type == "kubevirt":
++        cluster_type = "kubevirt"
++        workflow_template = "launcher-create-capi-kubevirt-cluster-and-bootstrap.j2"
++    elif vim_type == "azure":
+         cluster_type = "aks"
+     elif vim_type == "aws":
+         cluster_type = "eks"
+     elif vim_type == "gcp":
+         cluster_type = "gke"
+     else:
+-        raise Exception("Not suitable VIM account to register cluster")
++        raise Exception("Not suitable VIM account to create cluster")
+ 
+     # Create configmap for subnet
+     configmap_name = None
+@@ -131,34 +137,74 @@ async def create_cluster(self, op_id, op_params, content):
+     #     output_file=None,
+     #     **workflow_kwargs
+     # )
+-    manifest = self.render_jinja_template(
+-        workflow_template,
+-        output_file=None,
+-        workflow_name=workflow_name,
+-        git_fleet_url=self._repo_fleet_url,
+-        git_sw_catalogs_url=self._repo_sw_catalogs_url,
+-        cluster_name=cluster_name,
+-        cluster_type=cluster_type,
+-        cluster_kustomization_name=cluster_kustomization_name,
+-        providerconfig_name=providerconfig_name,
+-        public_key_mgmt=self._pubkey,
+-        public_key_new_cluster=public_key_new_cluster,
+-        secret_name_private_key_new_cluster=secret_name,
+-        vm_size=db_cluster.get("node_size", "default"),
+-        node_count=db_cluster.get("node_count", "default"),
+-        k8s_version=db_cluster["k8s_version"],
+-        cluster_location=db_cluster["region_name"],
+-        configmap_name=configmap_name if configmap_name else "default",
+-        cluster_iam_role=db_cluster.get("iam_role", "default"),
+-        cluster_private_subnets_id=db_cluster.get("private_subnet", "default"),
+-        cluster_public_subnets_id=db_cluster.get("public_subnet", "default"),
+-        osm_project_name=osm_project_name,
+-        rg_name=db_cluster.get("resource_group", "''"),
+-        preemptible_nodes=db_cluster.get("preemptible_nodes", "false"),
+-        skip_bootstrap=skip_bootstrap,
+-        workflow_debug=self._workflow_debug,
+-        workflow_dry_run=self._workflow_dry_run,
+-    )
++    if vim_type == "kubevirt":
++        # CAPK launcher: KubeVirt sizing/network params, no cloud parameters.
++        # CAPK-specific values are overridable per-cluster via `--config`
++        # (stored in db_cluster); otherwise the workflow-template defaults apply.
++        manifest = self.render_jinja_template(
++            workflow_template,
++            output_file=None,
++            workflow_name=workflow_name,
++            git_fleet_url=self._repo_fleet_url,
++            git_sw_catalogs_url=self._repo_sw_catalogs_url,
++            cluster_name=cluster_name,
++            cluster_kustomization_name=cluster_kustomization_name,
++            public_key_mgmt=self._pubkey,
++            public_key_new_cluster=public_key_new_cluster,
++            secret_name_private_key_new_cluster=secret_name,
++            node_count=db_cluster.get("node_count", "1"),
++            k8s_version=db_cluster["k8s_version"],
++            osm_project_name=osm_project_name,
++            skip_bootstrap=skip_bootstrap,
++            control_plane_node_count=db_cluster.get("control_plane_node_count", "1"),
++            control_plane_cpu_cores=db_cluster.get("control_plane_cpu_cores", "2"),
++            control_plane_memory=db_cluster.get("control_plane_memory", "4Gi"),
++            control_plane_ephemeral_storage=db_cluster.get(
++                "control_plane_ephemeral_storage", "2Gi"
++            ),
++            worker_cpu_cores=db_cluster.get("worker_cpu_cores", "2"),
++            worker_memory=db_cluster.get("worker_memory", "4Gi"),
++            worker_ephemeral_storage=db_cluster.get("worker_ephemeral_storage", "2Gi"),
++            vm_image=db_cluster.get("vm_image")
++            or f"quay.io/capk/ubuntu-2204-container-disk:v{db_cluster['k8s_version']}",
++            pod_cidr=db_cluster.get("pod_cidr", "10.243.0.0/16"),
++            service_cidr=db_cluster.get("service_cidr", "10.95.0.0/16"),
++            cluster_cni=db_cluster.get("cluster_cni", "calico"),
++            capk_resources_namespace=db_cluster.get(
++                "capk_resources_namespace", "default"
++            ),
++            workflow_debug=self._workflow_debug,
++            workflow_dry_run=self._workflow_dry_run,
++        )
++    else:
++        manifest = self.render_jinja_template(
++            workflow_template,
++            output_file=None,
++            workflow_name=workflow_name,
++            git_fleet_url=self._repo_fleet_url,
++            git_sw_catalogs_url=self._repo_sw_catalogs_url,
++            cluster_name=cluster_name,
++            cluster_type=cluster_type,
++            cluster_kustomization_name=cluster_kustomization_name,
++            providerconfig_name=providerconfig_name,
++            public_key_mgmt=self._pubkey,
++            public_key_new_cluster=public_key_new_cluster,
++            secret_name_private_key_new_cluster=secret_name,
++            vm_size=db_cluster.get("node_size", "default"),
++            node_count=db_cluster.get("node_count", "default"),
++            k8s_version=db_cluster["k8s_version"],
++            cluster_location=db_cluster["region_name"],
++            configmap_name=configmap_name if configmap_name else "default",
++            cluster_iam_role=db_cluster.get("iam_role", "default"),
++            cluster_private_subnets_id=db_cluster.get("private_subnet", "default"),
++            cluster_public_subnets_id=db_cluster.get("public_subnet", "default"),
++            osm_project_name=osm_project_name,
++            rg_name=db_cluster.get("resource_group", "''"),
++            preemptible_nodes=db_cluster.get("preemptible_nodes", "false"),
++            skip_bootstrap=skip_bootstrap,
++            workflow_debug=self._workflow_debug,
++            workflow_dry_run=self._workflow_dry_run,
++        )
+     # self.logger.debug(f"Workflow manifest: {manifest}")
+ 
+     # Submit workflow
+@@ -226,7 +272,10 @@ async def update_cluster(self, op_id, op_params, content):
+     vm_size = op_params.get("node_size", db_cluster["node_size"])
+     node_count = op_params.get("node_count", db_cluster["node_count"])
+     k8s_version = op_params.get("k8s_version", db_cluster["k8s_version"])
+-    if vim_type == "azure":
++    if vim_type == "kubevirt":
++        cluster_type = "kubevirt"
++        workflow_template = "launcher-update-capi-kubevirt-cluster.j2"
++    elif vim_type == "azure":
+         cluster_type = "aks"
+     elif vim_type == "aws":
+         cluster_type = "eks"
+@@ -236,29 +285,83 @@ async def update_cluster(self, op_id, op_params, content):
+         raise Exception("Not suitable VIM account to update cluster")
+ 
+     # Render workflow
+-    manifest = self.render_jinja_template(
+-        workflow_template,
+-        output_file=None,
+-        workflow_name=workflow_name,
+-        git_fleet_url=self._repo_fleet_url,
+-        git_sw_catalogs_url=self._repo_sw_catalogs_url,
+-        cluster_name=cluster_name,
+-        cluster_type=cluster_type,
+-        cluster_kustomization_name=cluster_kustomization_name,
+-        providerconfig_name=providerconfig_name,
+-        public_key_mgmt=self._pubkey,
+-        public_key_new_cluster=public_key_cluster,
+-        secret_name_private_key_new_cluster=secret_name,
+-        vm_size=vm_size,
+-        node_count=node_count,
+-        k8s_version=k8s_version,
+-        cluster_location=db_cluster["region_name"],
+-        osm_project_name=osm_project_name,
+-        rg_name=db_cluster.get("resource_group", "''"),
+-        preemptible_nodes=db_cluster.get("preemptible_nodes", "false"),
+-        workflow_debug=self._workflow_debug,
+-        workflow_dry_run=self._workflow_dry_run,
+-    )
++    if vim_type == "kubevirt":
++        # Day-2 for CAPK: op_params override the stored values (scale node_count,
++        # change k8s_version, resize VMs); fall back to the cluster's current spec.
++        manifest = self.render_jinja_template(
++            workflow_template,
++            output_file=None,
++            workflow_name=workflow_name,
++            git_fleet_url=self._repo_fleet_url,
++            git_sw_catalogs_url=self._repo_sw_catalogs_url,
++            cluster_name=cluster_name,
++            cluster_kustomization_name=cluster_kustomization_name,
++            public_key_mgmt=self._pubkey,
++            public_key_new_cluster=public_key_cluster,
++            secret_name_private_key_new_cluster=secret_name,
++            node_count=node_count,
++            k8s_version=k8s_version,
++            osm_project_name=osm_project_name,
++            control_plane_node_count=op_params.get(
++                "control_plane_node_count",
++                db_cluster.get("control_plane_node_count", "1"),
++            ),
++            control_plane_cpu_cores=op_params.get(
++                "control_plane_cpu_cores", db_cluster.get("control_plane_cpu_cores", "2")
++            ),
++            control_plane_memory=op_params.get(
++                "control_plane_memory", db_cluster.get("control_plane_memory", "4Gi")
++            ),
++            control_plane_ephemeral_storage=op_params.get(
++                "control_plane_ephemeral_storage",
++                db_cluster.get("control_plane_ephemeral_storage", "2Gi"),
++            ),
++            worker_cpu_cores=op_params.get(
++                "worker_cpu_cores", db_cluster.get("worker_cpu_cores", "2")
++            ),
++            worker_memory=op_params.get(
++                "worker_memory", db_cluster.get("worker_memory", "4Gi")
++            ),
++            worker_ephemeral_storage=op_params.get(
++                "worker_ephemeral_storage",
++                db_cluster.get("worker_ephemeral_storage", "2Gi"),
++            ),
++            vm_image=op_params.get("vm_image")
++            or db_cluster.get("vm_image")
++            or f"quay.io/capk/ubuntu-2204-container-disk:v{k8s_version}",
++            pod_cidr=db_cluster.get("pod_cidr", "10.243.0.0/16"),
++            service_cidr=db_cluster.get("service_cidr", "10.95.0.0/16"),
++            cluster_cni=db_cluster.get("cluster_cni", "calico"),
++            capk_resources_namespace=db_cluster.get(
++                "capk_resources_namespace", "default"
++            ),
++            workflow_debug=self._workflow_debug,
++            workflow_dry_run=self._workflow_dry_run,
++        )
++    else:
++        manifest = self.render_jinja_template(
++            workflow_template,
++            output_file=None,
++            workflow_name=workflow_name,
++            git_fleet_url=self._repo_fleet_url,
++            git_sw_catalogs_url=self._repo_sw_catalogs_url,
++            cluster_name=cluster_name,
++            cluster_type=cluster_type,
++            cluster_kustomization_name=cluster_kustomization_name,
++            providerconfig_name=providerconfig_name,
++            public_key_mgmt=self._pubkey,
++            public_key_new_cluster=public_key_cluster,
++            secret_name_private_key_new_cluster=secret_name,
++            vm_size=vm_size,
++            node_count=node_count,
++            k8s_version=k8s_version,
++            cluster_location=db_cluster["region_name"],
++            osm_project_name=osm_project_name,
++            rg_name=db_cluster.get("resource_group", "''"),
++            preemptible_nodes=db_cluster.get("preemptible_nodes", "false"),
++            workflow_debug=self._workflow_debug,
++            workflow_dry_run=self._workflow_dry_run,
++        )
+     # self.logger.info(manifest)
+ 
+     # Submit workflow
+diff --git a/osm_lcm/odu_libs/templates/launcher-create-capi-kubevirt-cluster-and-bootstrap.j2 b/osm_lcm/odu_libs/templates/launcher-create-capi-kubevirt-cluster-and-bootstrap.j2
+new file mode 100644
+index 0000000..b3a2077
+--- /dev/null
++++ b/osm_lcm/odu_libs/templates/launcher-create-capi-kubevirt-cluster-and-bootstrap.j2
+@@ -0,0 +1,123 @@
++#######################################################################################
++# Copyright ETSI Contributors and Others.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#    http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++# implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#######################################################################################
++#
++# Launcher for CAPI + KubeVirt (CAPK) clusters. Unlike the crossplane providers
++# (AKS/EKS/GKE), these clusters are provisioned by Cluster API running on the OSM
++# management cluster itself, as KubeVirt VirtualMachineInstances. There is no
++# external cloud account, so the cloud-specific parameters (vm_size, region,
++# providerconfig, IAM role, subnets) do not apply; instead we pass the
++# KubeVirt-specific sizing and network parameters.
++apiVersion: argoproj.io/v1alpha1
++kind: Workflow
++metadata:
++  name: {{ workflow_name }}
++spec:
++  arguments:
++    parameters:
++
++    # Fleet repo
++    - name: git_fleet_url
++      value: "{{ git_fleet_url }}"
++    - name: fleet_destination_folder
++      value: "/fleet/fleet-osm"
++    - name: git_fleet_cred_secret
++      value: fleet-repo
++
++    # SW-Catalogs repo
++    - name: git_sw_catalogs_url
++      value: "{{ git_sw_catalogs_url }}"
++    - name: sw_catalogs_destination_folder
++      value: "/sw-catalogs/sw-catalogs-osm"
++    - name: git_sw_catalogs_cred_secret
++      value: sw-catalogs
++
++    # Specific parameters - Generic cluster creation
++    - name: cluster_kustomization_name
++      value: {{ cluster_kustomization_name }}
++    - name: cluster_name
++      value: {{ cluster_name }}
++    - name: node_count
++      value: "{{ node_count }}"
++    - name: k8s_version
++      value: "{{ k8s_version }}"
++
++    # Specific parameters - CAPI KubeVirt sizing
++    - name: control_plane_node_count
++      value: "{{ control_plane_node_count }}"
++    - name: control_plane_cpu_cores
++      value: "{{ control_plane_cpu_cores }}"
++    - name: control_plane_memory
++      value: "{{ control_plane_memory }}"
++    - name: control_plane_ephemeral_storage
++      value: "{{ control_plane_ephemeral_storage }}"
++    - name: worker_cpu_cores
++      value: "{{ worker_cpu_cores }}"
++    - name: worker_memory
++      value: "{{ worker_memory }}"
++    - name: worker_ephemeral_storage
++      value: "{{ worker_ephemeral_storage }}"
++    - name: vm_image
++      value: "{{ vm_image }}"
++
++    # Specific parameters - CAPI KubeVirt networking
++    - name: pod_cidr
++      value: "{{ pod_cidr }}"
++    - name: service_cidr
++      value: "{{ service_cidr }}"
++    - name: cluster_cni
++      value: "{{ cluster_cni }}"
++    - name: capk_resources_namespace
++      value: "{{ capk_resources_namespace }}"
++
++    # Specific parameters - Bootstrap and credentials
++    - name: public_key_mgmt
++      value: "{{ public_key_mgmt }}"
++    - name: public_key_new_cluster
++      value: "{{ public_key_new_cluster }}"
++    - name: secret_name_private_age_key_for_new_cluster
++      value: "{{ secret_name_private_key_new_cluster }}"
++    - name: key_name_in_secret
++      value: "agekey"
++    - name: mgmt_project_name
++      value: "{{ osm_project_name }}"
++
++    # Advanced parameters - Recommended to keep defaults
++    - name: skip_bootstrap
++      value: "{{ skip_bootstrap }}"
++    - name: mgmt_cluster_name
++      value: "_management"
++    - name: base_templates_path
++      value: "cloud-resources/capi"
++    - name: cloned_fleet_folder_name
++      value: "fleet-osm"
++    - name: cloned_sw_catalogs_folder_name
++      value: "sw-catalogs-osm"
++
++    # Debug/dry run?
++    - name: debug
++      value: "{{ workflow_debug }}"
++    - name: dry_run
++      value: "{{ workflow_dry_run }}"
++
++
++  # Cleanup policy
++  ttlStrategy:
++    secondsAfterSuccess: 1800     # Time to live after workflow is successful
++    secondsAfterFailure: 7200     # Time to live after workflow fails
++
++  workflowTemplateRef:
++    name: full-create-capi-kubevirt-cluster-and-bootstrap-wft
+diff --git a/osm_lcm/odu_libs/templates/launcher-update-capi-kubevirt-cluster.j2 b/osm_lcm/odu_libs/templates/launcher-update-capi-kubevirt-cluster.j2
+new file mode 100644
+index 0000000..da1e47d
+--- /dev/null
++++ b/osm_lcm/odu_libs/templates/launcher-update-capi-kubevirt-cluster.j2
+@@ -0,0 +1,119 @@
++#######################################################################################
++# Copyright ETSI Contributors and Others.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#    http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++# implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#######################################################################################
++#
++# Day-2 update launcher for CAPI + KubeVirt (CAPK) clusters (scale node count,
++# change Kubernetes version, resize VMs). The update workflow always skips the
++# OSM bootstrap (the cluster is already bootstrapped), so it re-renders the Flux
++# Kustomizations with the new sizing/version and lets Cluster API reconcile.
++apiVersion: argoproj.io/v1alpha1
++kind: Workflow
++metadata:
++  name: {{ workflow_name }}
++spec:
++  arguments:
++    parameters:
++
++    # Fleet repo
++    - name: git_fleet_url
++      value: "{{ git_fleet_url }}"
++    - name: fleet_destination_folder
++      value: "/fleet/fleet-osm"
++    - name: git_fleet_cred_secret
++      value: fleet-repo
++
++    # SW-Catalogs repo
++    - name: git_sw_catalogs_url
++      value: "{{ git_sw_catalogs_url }}"
++    - name: sw_catalogs_destination_folder
++      value: "/sw-catalogs/sw-catalogs-osm"
++    - name: git_sw_catalogs_cred_secret
++      value: sw-catalogs
++
++    # Specific parameters - Generic cluster update
++    - name: cluster_kustomization_name
++      value: {{ cluster_kustomization_name }}
++    - name: cluster_name
++      value: {{ cluster_name }}
++    - name: node_count
++      value: "{{ node_count }}"
++    - name: k8s_version
++      value: "{{ k8s_version }}"
++
++    # Specific parameters - CAPI KubeVirt sizing
++    - name: control_plane_node_count
++      value: "{{ control_plane_node_count }}"
++    - name: control_plane_cpu_cores
++      value: "{{ control_plane_cpu_cores }}"
++    - name: control_plane_memory
++      value: "{{ control_plane_memory }}"
++    - name: control_plane_ephemeral_storage
++      value: "{{ control_plane_ephemeral_storage }}"
++    - name: worker_cpu_cores
++      value: "{{ worker_cpu_cores }}"
++    - name: worker_memory
++      value: "{{ worker_memory }}"
++    - name: worker_ephemeral_storage
++      value: "{{ worker_ephemeral_storage }}"
++    - name: vm_image
++      value: "{{ vm_image }}"
++
++    # Specific parameters - CAPI KubeVirt networking
++    - name: pod_cidr
++      value: "{{ pod_cidr }}"
++    - name: service_cidr
++      value: "{{ service_cidr }}"
++    - name: cluster_cni
++      value: "{{ cluster_cni }}"
++    - name: capk_resources_namespace
++      value: "{{ capk_resources_namespace }}"
++
++    # Specific parameters - Bootstrap and credentials
++    - name: public_key_mgmt
++      value: "{{ public_key_mgmt }}"
++    - name: public_key_new_cluster
++      value: "{{ public_key_new_cluster }}"
++    - name: secret_name_private_age_key_for_new_cluster
++      value: "{{ secret_name_private_key_new_cluster }}"
++    - name: key_name_in_secret
++      value: "agekey"
++    - name: mgmt_project_name
++      value: "{{ osm_project_name }}"
++
++    # Advanced parameters - Recommended to keep defaults
++    - name: mgmt_cluster_name
++      value: "_management"
++    - name: base_templates_path
++      value: "cloud-resources/capi"
++    - name: cloned_fleet_folder_name
++      value: "fleet-osm"
++    - name: cloned_sw_catalogs_folder_name
++      value: "sw-catalogs-osm"
++
++    # Debug/dry run?
++    - name: debug
++      value: "{{ workflow_debug }}"
++    - name: dry_run
++      value: "{{ workflow_dry_run }}"
++
++
++  # Cleanup policy
++  ttlStrategy:
++    secondsAfterSuccess: 1800     # Time to live after workflow is successful
++    secondsAfterFailure: 7200     # Time to live after workflow fails
++
++  workflowTemplateRef:
++    name: full-update-capi-kubevirt-cluster-and-bootstrap-wft

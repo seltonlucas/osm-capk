@@ -1,0 +1,133 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: clone-transform-push-wft
+  namespace: osm-workflows
+
+spec:
+  arguments:
+    parameters:
+    # Fleet repo
+    - name: git_fleet_url
+    - name: fleet_destination_folder
+    - name: git_fleet_cred_secret
+    # SW-Catalogs repo
+    - name: git_sw_catalogs_url
+    - name: sw_catalogs_destination_folder
+    - name: git_sw_catalogs_cred_secret
+    # Transformation template
+    - name: templateref_name
+      # value: debugging-wft
+    - name: templateref_template
+      # value: ls-command
+
+  entrypoint: main
+
+  templates:
+
+  # Main template
+  - name: main
+    inputs:
+      parameters:
+      - name: git_fleet_url
+      - name: fleet_destination_folder
+      - name: git_fleet_cred_secret
+      - name: git_sw_catalogs_url
+      - name: sw_catalogs_destination_folder
+      - name: git_sw_catalogs_cred_secret
+      - name: templateref_name
+      - name: templateref_template
+    steps:
+    - - name: generate-volume-repos
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'
+    - - name: clone-fleet
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: repo_url
+            value: "{{inputs.parameters.git_fleet_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-volume-repos.outputs.parameters.pvc-name}}'
+    - - name: clone-sw-catalogs
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: repo_url
+            value: "{{inputs.parameters.git_sw_catalogs_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.sw_catalogs_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_sw_catalogs_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-volume-repos.outputs.parameters.pvc-name}}'
+    - - name: transform
+        templateRef:
+          name: "{{inputs.parameters.templateref_name}}"
+          template: "{{inputs.parameters.templateref_template}}"
+        arguments:
+          parameters:
+          - name: folder
+            value: "/repos"
+          - name: volume_name
+            value: '{{steps.generate-volume-repos.outputs.parameters.pvc-name}}'
+          - name: mount_path
+            value: "/repos"
+    # - - name: list-repo-files
+    #     template: ls-command
+    #     arguments:
+    #       parameters:
+    #       - name: folder
+    #         value: "/repos"
+    #       - name: volume_name
+    #         value: '{{steps.generate-volume-repos.outputs.parameters.pvc-name}}'
+    #       - name: mount_path
+    #         value: "/repos"
+    - - name: push-to-fleet
+        templateRef:
+          name: git-wft
+          template: git-commit-merge-push
+        arguments:
+          parameters:
+          - name: repo_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-volume-repos.outputs.parameters.pvc-name}}'
+          - name: commit_message
+            value: "My test commit message"
+          - name: main_branch
+            value: main
+          - name: contrib_branch
+            value: osm_contrib

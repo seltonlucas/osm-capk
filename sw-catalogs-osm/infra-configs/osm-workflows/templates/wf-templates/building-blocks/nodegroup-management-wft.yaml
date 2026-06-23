@@ -1,0 +1,264 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: nodegroup-management-wft
+  namespace: osm-workflows
+spec:
+  templates:
+
+  # Create a nodegroup in AWS
+  - name: create-nodegroup
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: nodegroup_name
+      - name: nodegroup_kustomization_name
+      - name: cluster_name
+      - name: cluster_type
+      - name: providerconfig_name
+      - name: vm_size
+      - name: node_count
+      - name: cluster_location
+      - name: configmap_name
+      - name: role
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## Do we want to skip OSM's bootstrap?
+      - name: skip_bootstrap
+        value: "false"
+      ## AKS only (otherwise, empty)
+      - name: rg_name
+        values: ""
+      ## GKE only (otherwise, empty)
+      - name: preemptible_nodes
+        values: "false"
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_nodegroup
+      - "{{inputs.parameters.nodegroup_name}}"
+      - "{{inputs.parameters.nodegroup_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.cluster_type}}"
+      - "{{inputs.parameters.providerconfig_name}}"
+      - "{{inputs.parameters.vm_size}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.cluster_location}}"
+      - "{{inputs.parameters.configmap_name}}"
+      - "{{inputs.parameters.role}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.rg_name}}"
+      - "{{inputs.parameters.preemptible_nodes}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      - "{{inputs.parameters.skip_bootstrap}}"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+  - name: scale-nodegroup
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: nodegroup_name
+      - name: nodegroup_kustomization_name
+      - name: cluster_name
+      - name: cluster_type
+      - name: node_count
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - scale_nodegroup
+      - "{{inputs.parameters.nodegroup_name}}"
+      - "{{inputs.parameters.nodegroup_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.cluster_type}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+  
+  # Delete nodegroup from **ANY** cluster
+  - name: delete-nodegroup
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+
+      # Specific parameters
+      - name: nodegroup_kustomization_name
+      - name: cluster_name
+      - name: project_name
+        value: "osm_admin"
+
+      # Other parameters - Recommended to keep defaults
+      - name: fleet_repo_dir
+        value: "/fleet/fleet-osm/"
+      - name: mgmt_resources_dir
+        value: "{{inputs.parameters.fleet_repo_dir}}/{{inputs.parameters.project_name}}/managed-resources/_management"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - delete_nodegroup
+      - "{{inputs.parameters.nodegroup_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.fleet_repo_dir}}"
+      - "{{inputs.parameters.mgmt_resources_dir}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000

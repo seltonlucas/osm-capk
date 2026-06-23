@@ -1,0 +1,123 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+#
+# Launcher for CAPI + KubeVirt (CAPK) clusters. Unlike the crossplane providers
+# (AKS/EKS/GKE), these clusters are provisioned by Cluster API running on the OSM
+# management cluster itself, as KubeVirt VirtualMachineInstances. There is no
+# external cloud account, so the cloud-specific parameters (vm_size, region,
+# providerconfig, IAM role, subnets) do not apply; instead we pass the
+# KubeVirt-specific sizing and network parameters.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: {{ workflow_name }}
+spec:
+  arguments:
+    parameters:
+
+    # Fleet repo
+    - name: git_fleet_url
+      value: "{{ git_fleet_url }}"
+    - name: fleet_destination_folder
+      value: "/fleet/fleet-osm"
+    - name: git_fleet_cred_secret
+      value: fleet-repo
+
+    # SW-Catalogs repo
+    - name: git_sw_catalogs_url
+      value: "{{ git_sw_catalogs_url }}"
+    - name: sw_catalogs_destination_folder
+      value: "/sw-catalogs/sw-catalogs-osm"
+    - name: git_sw_catalogs_cred_secret
+      value: sw-catalogs
+
+    # Specific parameters - Generic cluster creation
+    - name: cluster_kustomization_name
+      value: {{ cluster_kustomization_name }}
+    - name: cluster_name
+      value: {{ cluster_name }}
+    - name: node_count
+      value: "{{ node_count }}"
+    - name: k8s_version
+      value: "{{ k8s_version }}"
+
+    # Specific parameters - CAPI KubeVirt sizing
+    - name: control_plane_node_count
+      value: "{{ control_plane_node_count }}"
+    - name: control_plane_cpu_cores
+      value: "{{ control_plane_cpu_cores }}"
+    - name: control_plane_memory
+      value: "{{ control_plane_memory }}"
+    - name: control_plane_ephemeral_storage
+      value: "{{ control_plane_ephemeral_storage }}"
+    - name: worker_cpu_cores
+      value: "{{ worker_cpu_cores }}"
+    - name: worker_memory
+      value: "{{ worker_memory }}"
+    - name: worker_ephemeral_storage
+      value: "{{ worker_ephemeral_storage }}"
+    - name: vm_image
+      value: "{{ vm_image }}"
+
+    # Specific parameters - CAPI KubeVirt networking
+    - name: pod_cidr
+      value: "{{ pod_cidr }}"
+    - name: service_cidr
+      value: "{{ service_cidr }}"
+    - name: cluster_cni
+      value: "{{ cluster_cni }}"
+    - name: capk_resources_namespace
+      value: "{{ capk_resources_namespace }}"
+
+    # Specific parameters - Bootstrap and credentials
+    - name: public_key_mgmt
+      value: "{{ public_key_mgmt }}"
+    - name: public_key_new_cluster
+      value: "{{ public_key_new_cluster }}"
+    - name: secret_name_private_age_key_for_new_cluster
+      value: "{{ secret_name_private_key_new_cluster }}"
+    - name: key_name_in_secret
+      value: "agekey"
+    - name: mgmt_project_name
+      value: "{{ osm_project_name }}"
+
+    # Advanced parameters - Recommended to keep defaults
+    - name: skip_bootstrap
+      value: "{{ skip_bootstrap }}"
+    - name: mgmt_cluster_name
+      value: "_management"
+    - name: base_templates_path
+      value: "cloud-resources/capi"
+    - name: cloned_fleet_folder_name
+      value: "fleet-osm"
+    - name: cloned_sw_catalogs_folder_name
+      value: "sw-catalogs-osm"
+
+    # Debug/dry run?
+    - name: debug
+      value: "{{ workflow_debug }}"
+    - name: dry_run
+      value: "{{ workflow_dry_run }}"
+
+
+  # Cleanup policy
+  ttlStrategy:
+    secondsAfterSuccess: 1800     # Time to live after workflow is successful
+    secondsAfterFailure: 7200     # Time to live after workflow fails
+
+  workflowTemplateRef:
+    name: full-create-capi-kubevirt-cluster-and-bootstrap-wft

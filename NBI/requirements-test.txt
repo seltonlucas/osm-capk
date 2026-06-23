@@ -1,0 +1,62 @@
+# Copyright 2018 Telefonica S.A.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+aiohappyeyeballs==2.6.1
+    # via aiohttp
+aiohttp==3.13.2
+    # via aioresponses
+aioresponses==0.7.8
+    # via -r requirements-test.in
+aiosignal==1.4.0
+    # via aiohttp
+async-timeout==4.0.3
+    # via
+    #   -r requirements-test.in
+    #   aiohttp
+asynctest==0.13.0
+    # via -r requirements-test.in
+attrs==25.4.0
+    # via aiohttp
+coverage==7.13.0
+    # via -r requirements-test.in
+deepdiff==8.6.1
+    # via -r requirements-test.in
+frozenlist==1.8.0
+    # via
+    #   aiohttp
+    #   aiosignal
+idna==3.11
+    # via yarl
+multidict==6.7.0
+    # via
+    #   aiohttp
+    #   yarl
+nose2==0.15.1
+    # via -r requirements-test.in
+orderly-set==5.5.0
+    # via deepdiff
+packaging==25.0
+    # via aioresponses
+propcache==0.4.1
+    # via
+    #   aiohttp
+    #   yarl
+typing-extensions==4.15.0
+    # via
+    #   aiosignal
+    #   multidict
+yarl==1.22.0
+    # via aiohttp

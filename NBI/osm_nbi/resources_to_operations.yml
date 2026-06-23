@@ -1,0 +1,493 @@
+# Copyright 2018 Whitestack, LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# For those usages not covered by the Apache License, Version 2.0 please
+# contact: esousa@whitestack.com or glavado@whitestack.com
+##
+
+### NOTE: This is INFORMATIVE ONLY!!!!
+### The right values are at module osm_nbi/nbi.py variable 'valid_url_methods' under ROLE_OPERATIONS key
+---
+resources_to_operations:
+
+##
+# The resources are defined using the following pattern:
+#
+#     "<METHOD> <PATH>": <OPERATION>
+#
+# Where <METHOD> refers to the HTTP Method being used, i.e. GET, POST, DELETE.
+# The <PATH> refers to the path after http(s)://<ip-or-domain>:<port>/osm
+# In the <PATH> variable parts should be replaced, using the <variable_name>
+# notation. Inside the RBAC module these variables can be extracted for further
+# analysis.
+#
+# NOTE: the <artifactPath> tag is reserved for artifact path (or file locations).
+#       meaning that it retains a special meaning.
+#
+# Operations are organized in a hierarchical tree, where <OPERATION> defines
+# the full path until the leaf (all the nodes in between need to be specified).
+#
+# NOTE: The end user should not modify this file.
+##
+
+################################################################################
+##################################### NSDs #####################################
+################################################################################
+
+  "GET /nsd/v1/ns_descriptors_content": "nsds:content:get"
+  "GET /nsd/v1/ns_descriptors": "nsds:get"
+
+  "POST /nsd/v1/ns_descriptors_content": "nsds:content:post"
+
+  "GET /nsd/v1/ns_descriptors_content/<nsdInfoId>": "nsds:id:get"
+  "GET /nsd/v1/ns_descriptors/<nsdInfoId>": "nsds:id:get"
+
+  "PUT /nsd/v1/ns_descriptors_content/<nsdInfoId>": "nsds:id:put"
+
+  "DELETE /nsd/v1/ns_descriptors_content/<nsdInfoId>": "nsds:id:delete"
+  "DELETE /nsd/v1/ns_descriptors/<nsdInfoId>": "nsds:id:delete"
+
+  "POST /nsd/v1/ns_descriptors": "nsds:post"
+
+  "PATCH /nsd/v1/ns_descriptors/<nsdInfoId>": "nsds:id:patch"
+
+  "GET /nsd/v1/ns_descriptors/<nsdInfoId>/nsd_content": "nsds:id:content:get"
+
+  "PUT /nsd/v1/ns_descriptors/<nsdInfoId>/nsd_content": "nsds:id:content:put"
+
+  "GET /nsd/v1/ns_descriptors/<nsdInfoId>/nsd": "nsds:id:nsd:get"
+
+  "GET /nsd/v1/ns_descriptors/<nsdInfoId>/artifacts": "nsds:id:nsd_artifact:get"
+  "GET /nsd/v1/ns_descriptors/<nsdInfoId>/artifacts/<artifactPath>": "nsds:id:nsd_artifact:get"
+
+################################################################################
+##################################### VNFDs ####################################
+################################################################################
+
+  "GET /vnfpkgm/v1/vnf_packages_content": "vnfds:content:get"
+  "GET /vnfpkgm/v1/vnf_packages": "vnfds:get"
+
+  "POST /vnfpkgm/v1/vnf_packages_content": "vnfds:content:post"
+
+  "GET /vnfpkgm/v1/vnf_packages_content/<vnfPkgId>": "vnfds:id:get"
+  "GET /vnfpkgm/v1/vnf_packages/<vnfPkgId>": "vnfds:id:get"
+
+  "PUT /vnfpkgm/v1/vnf_packages_content/<vnfPkgId>": "vnfds:id:put"
+
+  "DELETE /vnfpkgm/v1/vnf_packages_content/<vnfPkgId>": "vnfds:id:delete"
+  "DELETE /vnfpkgm/v1/vnf_packages/<vnfPkgId>": "vnfds:id:delete"
+
+  "POST /vnfpkgm/v1/vnf_packages": "vnfds:post"
+
+  "PATCH /vnfpkgm/v1/vnf_packages/<vnfPkgId>": "vnfds:id:patch"
+
+  "GET /vnfpkgm/v1/vnf_packages/<vnfPkgId>/package_content": "vnfds:id:content:get"
+
+  "PUT /vnfpkgm/v1/vnf_packages/<vnfPkgId>/package_content": "vnfds:id:content:put"
+
+  "POST /vnfpkgm/v1/vnf_packages/<vnfPkgId>/package_content/upload_from_uri": "vnfds:id:upload:post"
+
+  "GET /vnfpkgm/v1/vnf_packages/<vnfPkgId>/vnfd": "vnfds:id:vnfd:get"
+
+  "GET /vnfpkgm/v1/vnf_packages/<vnfPkgId>/artifacts": "vnfds:id:vnfd_artifact:get"
+  "GET /vnfpkgm/v1/vnf_packages/<vnfPkgId>/artifacts/<artifactPath>": "vnfds:id:vnfd_artifact:get"
+
+  "POST /vnfpkgm/v1/vnf_packages/<vnfPkgId>/action": "vnfds:id:action:post"
+
+  "GET /vnfpkgm/v1/vnfpkg_op_occs": "vnfds:vnfpkgops:get"
+  "GET /vnfpkgm/v1/vnfpkg_op_occs/<vnfPkgOpId>": "vnfds:vnfpkgops:id:get"
+
+################################################################################
+################################## NS Instances ################################
+################################################################################
+
+  "GET /nslcm/v1/ns_instances_content": "ns_instances:content:get"
+  "GET /nslcm/v1/ns_instances": "ns_instances:get"
+
+  "POST /nslcm/v1/ns_instances_content": "ns_instances:content:post"
+  "POST /nslcm/v1/ns_instances_terminate": "ns_instances:content:post"
+
+  "GET /nslcm/v1/ns_instances_content/<nsInstanceId>": "ns_instances:id:get"
+  "GET /nslcm/v1/ns_instances/<nsInstanceId>": "ns_instances:id:get"
+
+  "DELETE /nslcm/v1/ns_instances_content/<nsInstanceId>": "ns_instances:id:delete"
+  "DELETE /nslcm/v1/ns_instances/<nsInstanceId>": "ns_instances:id:delete"
+
+  "POST /nslcm/v1/ns_instances": "ns_instances:post"
+
+  "POST /nslcm/v1/ns_instances/<nsInstanceId>/instantiate": "ns_instances:id:instantiate:post"
+
+  "POST /nslcm/v1/ns_instances/<nsInstanceId>/terminate": "ns_instances:id:terminate:post"
+
+  "POST /nslcm/v1/ns_instances/<nsInstanceId>/action": "ns_instances:id:action:post"
+
+  "POST /nslcm/v1/ns_instances/<nsInstanceId>/update": "ns_instances:id:update:post"
+
+  "POST /nslcm/v1/ns_instances/<nsInstanceId>/scale": "ns_instances:id:scale:post"
+
+  "POST /nslcm/v1/ns_instances/<nsInstanceId>/migrate": "ns_instances:id:migrate:post"
+
+  "GET /nslcm/v1/ns_lcm_op_occs": "ns_instances:opps:get"
+
+  "GET /nslcm/v1/ns_lcm_op_occs/<nsLcmOpOccId>": "ns_instances:opps:id:get"
+
+################################################################################
+################################# VNF Instances ################################
+################################################################################
+
+  "GET /nslcm/v1/vnfrs": "vnf_instances:get"
+  "GET /nslcm/v1/vnf_instances": "vnf_instances:get"
+
+  "GET /nslcm/v1/vnfrs/<vnfInstanceId>": "vnf_instances:id:get"
+  "GET /nslcm/v1/vnf_instances/<vnfInstanceId>": "vnf_instances:id:get"
+
+  "GET /vnflcm/v1/vnf_instances/": "vnflcm_instances:get"
+  "POST /vnflcm/v1/vnf_instances/": "vnflcm_instances:post"
+
+  "GET /vnflcm/v1/vnf_instances/<vnfInstanceId>": "vnflcm_instances:id:get"
+  "DELETE /vnflcm/v1/vnf_instances/<vnfInstanceId>": "vnflcm_instances:id:delete"
+
+################################################################################
+#################################### Tokens ####################################
+################################################################################
+
+  "GET /admin/v1/tokens": "tokens:get"
+
+  "POST /admin/v1/tokens": "tokens:post"
+
+  "DELETE /admin/v1/tokens": "tokens:delete"
+
+  "GET /admin/v1/tokens/<id>": "tokens:id:get"
+
+  "DELETE /admin/v1/tokens/<id>": "tokens:id:delete"
+
+################################################################################
+##################################### Users ####################################
+################################################################################
+
+  "GET /admin/v1/users": "users:get"
+
+  "POST /admin/v1/users": "users:post"
+
+  "GET /admin/v1/users/<id>": "users:id:get"
+
+  "DELETE /admin/v1/users/<id>": "users:id:delete"
+
+  "PATCH /admin/v1/users/<id>": "users:id:patch"
+
+  "GET /admin/v1/domains": "domains:get"
+
+################################################################################
+#################################### Projects ##################################
+################################################################################
+
+  "GET /admin/v1/projects": "projects:get"
+
+  "POST /admin/v1/projects": "projects:post"
+
+  "GET /admin/v1/projects/<id>": "projects:id:get"
+
+  "PATCH /admin/v1/projects/<id>": "projects:id:patch"
+
+  "DELETE /admin/v1/projects/<id>": "projects:id:delete"
+
+################################################################################
+##################################### VIMs #####################################
+################################################################################
+
+  "GET /admin/v1/vims": "vims:get"
+
+  "POST /admin/v1/vims": "vims:post"
+
+  "GET /admin/v1/vims/<id>": "vims:id:get"
+
+  "DELETE /admin/v1/vims/<id>": "vims:id:delete"
+
+  "PATCH /admin/v1/vims/<id>": "vims:id:patch"
+
+################################################################################
+################################## VIM Accounts ################################
+################################################################################
+
+  "GET /admin/v1/vim_accounts": "vim_accounts:get"
+
+  "POST /admin/v1/vim_accounts": "vim_accounts:post"
+
+  "GET /admin/v1/vim_accounts/<id>": "vim_accounts:id:get"
+
+  "DELETE /admin/v1/vim_accounts/<id>": "vim_accounts:id:delete"
+
+  "PATCH /admin/v1/vim_accounts/<id>": "vim_accounts:id:patch"
+
+################################################################################
+################################# K8s Clusters ##############################
+################################################################################
+
+  "GET /admin/v1/k8sclusters": "k8sclusters:get"
+
+  "POST /admin/v1/k8sclusters": "k8sclusters:post"
+
+  "GET /admin/v1/k8sclusters/<id>": "k8sclusters:id:get"
+
+  "DELETE /admin/v1/k8sclusters/<id>": "k8sclusters:id:delete"
+
+  "PATCH /admin/v1/k8sclusters/<id>": "k8sclusters:id:patch"
+
+################################################################################
+####################################### VCAs ###################################
+################################################################################
+
+  "GET /admin/v1/vca": "vca:get"
+
+  "POST /admin/v1/vca": "vca:post"
+
+  "GET /admin/v1/vca/<id>": "vca:id:get"
+
+  "DELETE /admin/v1/vca/<id>": "vca:id:delete"
+
+  "PATCH /admin/v1/vca/<id>": "vca:id:patch"
+
+################################################################################
+################################# K8s Repos ##############################
+################################################################################
+
+  "GET /admin/v1/k8srepos": "k8srepos:get"
+
+  "POST /admin/v1/k8srepos": "k8srepos:post"
+
+  "GET /admin/v1/k8srepos/<id>": "k8srepos:id:get"
+
+  "DELETE /admin/v1/k8srepos/<id>": "k8srepos:id:delete"
+
+################################################################################
+################################# SDN Controllers ##############################
+################################################################################
+
+  "GET /admin/v1/sdns": "sdn_controllers:get"
+
+  "POST /admin/v1/sdns": "sdn_controllers:post"
+
+  "GET /admin/v1/sdns/<id>": "sdn_controllers:id:get"
+
+  "DELETE /admin/v1/sdns/<id>": "sdn_controllers:id:delete"
+
+  "PATCH /admin/v1/sdns/<id>": "sdn_controllers:id:patch"
+
+################################################################################
+################################## WIM Accounts ################################
+################################################################################
+
+  "GET /admin/v1/wim_accounts": "wim_accounts:get"
+
+  "POST /admin/v1/wim_accounts": "wim_accounts:post"
+
+  "GET /admin/v1/wim_accounts/<id>": "wim_accounts:id:get"
+
+  "DELETE /admin/v1/wim_accounts/<id>": "wim_accounts:id:delete"
+
+  "PATCH /admin/v1/wim_accounts/<id>": "wim_accounts:id:patch"
+
+################################################################################
+##################################### Roles ####################################
+################################################################################
+
+  "GET /admin/v1/roles": "roles:get"
+
+  "POST /admin/v1/roles": "roles:post"
+
+  "GET /admin/v1/roles/<id>": "roles:id:get"
+
+  "DELETE /admin/v1/roles/<id>": "roles:id:delete"
+
+  "PATCH /admin/v1/roles/<id>": "roles:id:patch"
+
+################################################################################
+##################################### PDUDs ####################################
+################################################################################
+
+  "GET /pdu/v1/pdu_descriptors": "pduds:get"
+
+  "POST /pdu/v1/pdu_descriptors": "pduds:post"
+
+  "PUT /pdu/v1/pdu_descriptors": "pduds:put"
+
+  "DELETE /pdu/v1/pdu_descriptors": "pduds:delete"
+
+  "PATCH /pdu/v1/pdu_descriptors": "pduds:patch"
+
+  "GET /pdu/v1/pdu_descriptors/<id>": "pduds:id:get"
+
+  "POST /pdu/v1/pdu_descriptors/<id>": "pduds:id:post"
+
+  "PUT /pdu/v1/pdu_descriptors/<id>": "pduds:id:put"
+
+  "DELETE /pdu/v1/pdu_descriptors/<id>": "pduds:id:delete"
+
+  "PATCH /pdu/v1/pdu_descriptors/<id>": "pduds:id:patch"
+
+################################################################################
+############################ Network Slice Templates ###########################
+################################################################################
+
+  "GET /nst/v1/netslice_templates_content": "slice_templates:get"
+  "GET /nst/v1/netslice_templates": "slice_templates:get"
+
+  "POST /nst/v1/netslice_templates_content": "slice_templates:content:post"
+
+  "GET /nst/v1/netslice_templates_content/<nstInfoId>": "slice_templates:id:get"
+  "GET /nst/v1/netslice_templates/<nstInfoId>": "slice_templates:id:get"
+
+  "PUT /nst/v1/netslice_templates_content/<nstInfoId>": "slice_templates:id:put"
+
+  "DELETE /nst/v1/netslice_templates_content/<nstInfoId>": "slice_templates:id:delete"
+  "DELETE /nst/v1/netslice_templates/<nstInfoId>": "slice_templates:id:delete"
+
+  "PATCH /nst/v1/netslice_templates/<nstInfoId>": "slice_templates:id:patch"
+
+  "GET /nst/v1/netslice_templates/<nstInfoId>/nst_content": "slice_templates:content:get"
+
+  "PUT /nst/v1/netslice_templates/<nstInfoId>/nst_content": "slice_templates:content:put"
+
+  "GET /nst/v1/netslice_templates/<nstInfoId>/nst": "slice_templates:id:nst:get"
+
+  "GET /nst/v1/netslice_templates/<nstInfoId>/artifacts": "slice_templates:id:nst_artifact:get"
+  "GET /nst/v1/netslice_templates/<nstInfoId>/artifacts/<artifactPath>": "slice_templates:id:nst_artifact:get"
+
+################################################################################
+############################ Network Slice Instances ###########################
+################################################################################
+
+  "GET /nsilcm/v1/netslice_instances_content": "slice_instances:get"
+  "GET /nsilcm/v1/netslice_instances": "slice_instances:get"
+
+  "POST /nsilcm/v1/netslice_instances_content": "slice_instances:content:post"
+
+  "GET /nsilcm/v1/netslice_instances_content/<SliceInstanceId>": "slice_instances:id:get"
+  "GET /nsilcm/v1/netslice_instances/<SliceInstanceId>": "slice_instances:id:get"
+
+  "DELETE /nsilcm/v1/netslice_instances_content/<SliceInstanceId>": "slice_instances:id:delete"
+  "DELETE /nsilcm/v1/netslice_instances/<SliceInstanceId>": "slice_instances:id:delete"
+
+  "POST /nsilcm/v1/netslice_instances": "slice_instances:post"
+
+  "POST /nsilcm/v1/netslice_instances/<SliceInstanceId>/instantiate": "slice_instances:id:instantiate:post"
+
+  "POST /nsilcm/v1/netslice_instances/<SliceInstanceId>/terminate": "slice_instances:id:terminate:post"
+
+  "POST /nsilcm/v1/netslice_instances/<SliceInstanceId>/action": "slice_instances:id:action:post"
+
+  "GET /nsilcm/v1/nsi_lcm_op_occs": "slice_instances:opps:get"
+
+  "GET /nsilcm/v1/nsi_lcm_op_occs/<nsiLcmOpOccId>": "slice_instances:opps:id:get"
+
+
+################################################################################
+############################ K8S CLUSTERS ######################################
+################################################################################
+
+  "GET /k8scluster/v1/clusters": "k8scluster:get"
+
+  "POST /k8scluster/v1/clusters": "k8scluster:post"
+
+  "GET /k8scluster/v1/clusters/<clustersId>": "k8scluster:id:get"
+
+  "DELETE /k8scluster/v1/clusters/<clustersId>": "k8scluster:id:delete"
+
+  "POST /k8scluster/v1/app_profiles": "k8scluster:app_profiles:post"
+
+  "GET /k8scluster/v1/app_profiles": "k8scluster:app_profiles:get"
+
+  "GET /k8scluster/v1/app_profiles/<app_profilesId>": "k8scluster:app_profiles:id:get"
+
+  "PATCH /k8scluster/v1/app_profiles/<app_profilesId>": "k8scluster:app_profiles:id:patch"
+
+  "DELETE /k8scluster/v1/app_profiles/<app_profilesId>": "k8scluster:app_profiles:id:delete"
+
+  "POST /k8scluster/v1/resource_profiles": "k8scluster:resource_profiles:post"
+
+  "GET /k8scluster/v1/resource_profiles": "k8scluster:resource_profiles:get"
+
+  "GET /k8scluster/v1/resource_profiles/<resource_profilesId>": "k8scluster:resource_profiles:id:get"
+
+  "PATCH /k8scluster/v1/resource_profiles/<resource_profilesId>": "k8scluster:resource_profiles:id:patch"
+
+  "DELETE /k8scluster/v1/resource_profiles/<resource_profilesId>": "k8scluster:resource_profiles:id:delete"
+
+  "GET /k8scluster/v1/infra_controller_profiles": "k8scluster:infra_controller_profiles:get"
+
+  "POST /k8scluster/v1/infra_controller_profiles": "k8scluster:infra_controller_profiles:post"
+
+  "GET /k8scluster/v1/infra_controller_profiles/<infra_controller_profilesId>": "k8scluster:infra_controller_profiles:id:get"
+
+  "PATCH /k8scluster/v1/infra_controller_profiles/<infra_controller_profilesId>": "k8scluster:infra_controller_profiles:id:patch"
+
+  "DELETE /k8scluster/v1/infra_controller_profiles/<infra_controller_profilesId>": "k8scluster:infra_controller_profiles:id:delete"
+
+  "GET /k8scluster/v1/infra_config_profiles": "k8scluster:infra_config_profiles:get"
+
+  "POST /k8scluster/v1/infra_config_profiles": "k8scluster:infra_config_profiles:post"
+
+  "GET /k8scluster/v1/infra_config_profiles/<infra_config_profilesId>": "k8scluster:infra_config_profiles:id:get"
+
+  "PATCH /k8scluster/v1/infra_config_profiles/<infra_config_profilesId>": "k8scluster:infra_config_profiles:id:patch"
+
+  "DELETE /k8scluster/v1/infra_config_profiles/<infra_config_profilesId>": "k8scluster:infra_config_profiles:id:delete"
+
+  "PATCH /k8scluster/v1/clusters/<clustersId>/app_profiles/": "k8scluster:id:app_profiles:patch"
+
+  "GET /k8scluster/v1/clusters/<clustersId>/app_profiles": "k8scluster:id:app_profiles:get"
+
+  "PATCH /k8scluster/v1/clusters/<clustersId>/resource_profiles/": "k8scluster:id:resource_profiles:patch"
+
+  "GET /k8scluster/v1/clusters/<clustersId>/resource_profiles": "k8scluster:id:resource_profiles:get"
+
+  "PATCH /k8scluster/v1/clusters/<clustersId>/infra_controller_profiles": "k8scluster:id:infra_controller_profiles:patch"
+
+  "GET /k8scluster/v1/<clustersId>/infra_controller_profiles": "k8scluster:id:infra_controller_profiles:get"
+
+  "PATCH /k8scluster/v1/clusters/<clustersId>/infra_config_profiles": "k8scluster:id:infra_config_profiles:patch"
+
+  "GET /k8scluster/v1/<clustersId>/infra_config_profiles": "k8scluster:id:infra_config_profiles:get"
+
+  "POST /k8scluster/v1/clusters/register": "k8scluster:register:post"
+
+  "DELETE /k8scluster/v1/clusters/<clustersId>/deregister": "k8scluster:id:deregister:delete"
+
+################################################################################
+############################ QUERY STRING admin operations #####################
+################################################################################
+
+  "GET ?ADMIN":    "admin:get"
+  "POST ?ADMIN":   "admin:post"
+  "PATCH ?ADMIN":  "admin:patch"
+  "PUT ?ADMIN":    "admin:put"
+  "DELETE ?ADMIN": "admin:delete"
+
+  "GET ?FORCE":    "force:get"
+  "POST ?FORCE":   "force:post"
+  "PATCH ?FORCE":  "force:patch"
+  "PUT ?FORCE":    "force:put"
+  "DELETE ?FORCE": "force:delete"
+
+  "GET ?PUBLIC":    "public:get"
+  "POST ?PUBLIC":   "public:post"
+  "PATCH ?PUBLIC":  "public:patch"
+  "PUT ?PUBLIC":    "public:put"
+  "DELETE ?PUBLIC": "public:delete"
+
+  "GET ?SET_PROJECT":    "set_project:get"
+  "POST ?SET_PROJECT":   "set_project:post"
+  "PATCH ?SET_PROJECT":  "set_project:patch"
+  "PUT ?SET_PROJECT":    "set_project:put"
+  "DELETE ?SET_PROJECT": "set_project:delete"

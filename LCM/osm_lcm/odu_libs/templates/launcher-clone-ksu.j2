@@ -1,0 +1,66 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: {{ workflow_name }}
+spec:
+  arguments:
+    parameters:
+    # Fleet repo
+    - name: git_fleet_url
+      value: "{{ git_fleet_url }}"
+    - name: fleet_destination_folder
+      value: "/fleet/fleet-osm"
+    - name: git_fleet_cred_secret
+      value: fleet-repo
+
+    # Specific parameters - Source and destination KSU
+    ## Source KSU:
+    - name: source_ksu_name
+      value: "jenkins"
+    - name: source_profile_name
+      value: "myakscluster01"
+    - name: source_profile_type
+      value: "applications"
+    - name: source_project_name
+      value: "osm_admin"
+    ## Destination KSU:
+    ## - If any of the destination parameters are not specified, it will assume
+    ##   they are the same as in source.
+    ## - It will reject if all are empty or equal to source, to avoid cloning a KSU over itself
+    - name: destination_ksu_name
+      value: ""
+    - name: destination_profile_name
+      value: "myprofile"
+    - name: destination_profile_type
+      value: "applications"
+    - name: destination_project_name
+      value: ""
+    # Debug/dry run?
+    - name: debug
+      value: "{{ workflow_debug }}"
+    - name: dry_run
+      value: "{{ workflow_dry_run }}"
+
+  # Cleanup policy
+  ttlStrategy:
+    secondsAfterSuccess: 1800     # Time to live after workflow is successful
+    secondsAfterFailure: 7200     # Time to live after workflow fails
+
+  workflowTemplateRef:
+    name: full-clone-ksu-wtf

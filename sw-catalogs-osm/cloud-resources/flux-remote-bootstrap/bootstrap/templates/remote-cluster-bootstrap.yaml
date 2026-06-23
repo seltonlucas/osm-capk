@@ -1,0 +1,407 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+---
+# TEMPLATE PARAMETERS:
+# ===================
+#
+# CLUSTER_KUSTOMIZATION_NAME: Name of the cluster in the management cluster (i.e., the `Kustomization`).
+# CLUSTER_NAME: Name of the cluster in the target cloud. It may differ from `CLUSTER_KUSTOMIZATION_NAME` since naming restrictions are often different from K8s resource naming restrictions (e.g., hyphens vs. underscores).
+# CLUSTER_AGE_SECRET_NAME: Name of the secret in the management cluster that keeps the private key for age/sops in the remote cluster.
+
+# Creates required remote namespaces
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-ns
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # interval: 1h
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}
+      namespace: ${CLUSTER_KUSTOMIZATION_NAMESPACE}
+  prune: true
+  # wait: true
+  # force: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/flux-remote-bootstrap/bootstrap/manifests/namespaces
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}
+
+---
+# Creates remote `flux-system.flux-system` secret
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-secret-flux
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # interval: 1h
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-ns
+  prune: true
+  # wait: true
+  force: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/flux-remote-bootstrap/bootstrap/manifests/secret
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}
+  patches:
+    - patch: |-
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${secret_name}
+          namespace: ${secret_namespace}
+        stringData:
+          username: ${username}
+          password: ${password}
+  # Inputs:
+  postBuild:
+    substitute:
+      secret_name: flux-system
+      secret_namespace: flux-system
+    substituteFrom:
+      - kind: Secret
+        name: flux-system
+
+---
+# Creates remote `flux-system.managed-resources` secret
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-secret-managedresources-flux
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # interval: 1h
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-ns
+  prune: true
+  # wait: true
+  force: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/flux-remote-bootstrap/bootstrap/manifests/secret
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}
+  patches:
+    - patch: |-
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${secret_name}
+          namespace: ${secret_namespace}
+        stringData:
+          username: ${username}
+          password: ${password}
+  # Inputs:
+  postBuild:
+    substitute:
+      secret_name: flux-system
+      secret_namespace: ${BOOTSTRAP_SECRET_NAMESPACE}
+    substituteFrom:
+      - kind: Secret
+        name: flux-system
+
+---
+# Creates remote `sops-age` secret
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-secret-sops
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # interval: 1h
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-ns
+  prune: true
+  # wait: true
+  force: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/flux-remote-bootstrap/bootstrap/manifests/secret
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}
+  patches:
+    - patch: |-
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${secret_name}
+          namespace: ${secret_namespace}
+        stringData:
+          age.agekey: ${agekey}
+  # Inputs:
+  postBuild:
+    substitute:
+      secret_name: sops-age
+      secret_namespace: flux-system
+    substituteFrom:
+      - kind: Secret
+        name: ${CLUSTER_AGE_SECRET_NAME}
+
+---
+# Creates remote `fleet-repo.flux-system` secret
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-secret-fleet
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # interval: 1h
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-ns
+  prune: true
+  # wait: true
+  force: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/flux-remote-bootstrap/bootstrap/manifests/secret
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}
+  patches:
+    - patch: |-
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${secret_name}
+          namespace: ${secret_namespace}
+        stringData:
+          username: ${username}
+          password: ${password}
+  # Inputs:
+  postBuild:
+    substitute:
+      secret_name: fleet-repo
+      secret_namespace: flux-system
+    substituteFrom:
+      - kind: Secret
+        name: fleet-repo
+
+---
+# Creates remote `fleet-repo.managed-resources` secret
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-secret-managedresources-fleet
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # interval: 1h
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-ns
+  prune: true
+  # wait: true
+  force: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/flux-remote-bootstrap/bootstrap/manifests/secret
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}
+  patches:
+    - patch: |-
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${secret_name}
+          namespace: ${secret_namespace}
+        stringData:
+          username: ${username}
+          password: ${password}
+  # Inputs:
+  postBuild:
+    substitute:
+      secret_name: fleet-repo
+      secret_namespace: ${BOOTSTRAP_SECRET_NAMESPACE}
+    substituteFrom:
+      - kind: Secret
+        name: fleet-repo
+
+---
+# Creates remote `sw-catalogs.flux-system` secret
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-secret-catalogs
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # interval: 1h
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-ns
+  prune: true
+  # wait: true
+  force: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/flux-remote-bootstrap/bootstrap/manifests/secret
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}
+  patches:
+    - patch: |-
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${secret_name}
+          namespace: ${secret_namespace}
+        stringData:
+          username: ${username}
+          password: ${password}
+  # Inputs:
+  postBuild:
+    substitute:
+      secret_name: sw-catalogs
+      secret_namespace: flux-system
+    substituteFrom:
+      - kind: Secret
+        name: sw-catalogs
+
+---
+# Creates remote `sw-catalogs.managed-resources` secret
+apiVersion: kustomize.toolkit.fluxcd.io/v1beta2
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-secret-managedresources-catalogs
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # interval: 1h
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-ns
+  prune: true
+  # wait: true
+  force: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/flux-remote-bootstrap/bootstrap/manifests/secret
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}
+  patches:
+    - patch: |-
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${secret_name}
+          namespace: ${secret_namespace}
+        stringData:
+          username: ${username}
+          password: ${password}
+  # Inputs:
+  postBuild:
+    substitute:
+      secret_name: sw-catalogs
+      secret_namespace: ${BOOTSTRAP_SECRET_NAMESPACE}
+    substituteFrom:
+      - kind: Secret
+        name: sw-catalogs
+
+---
+# Remote installation of Flux controller (to let the cluster be autonomous)
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-fluxctrl
+  namespace: ${BOOTSTRAP_KUSTOMIZATION_NAMESPACE}
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  # Tune interval as needed
+  interval: 10m0s
+  path: ./clusters/${CLUSTER_KUSTOMIZATION_NAME}/flux-system
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-bstrp-secret-flux
+  # Avoids removing resources unexpectedly
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  kubeConfig:
+    secretRef:
+      name: ${CLUSTER_KUBECONFIG_SECRET_NAME}
+      key: ${CLUSTER_KUBECONFIG_SECRET_KEY}

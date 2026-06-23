@@ -1,0 +1,53 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: containerservice.azure.upbound.io/v1beta1
+kind: KubernetesCluster
+metadata:
+  name: ${cluster_resource_name}
+spec:
+  forProvider:
+    # Force K8s version
+    # kubernetesVersion: 1.26
+    defaultNodePool:
+    - name: default
+      nodeCount: 1
+      # nodeCount: ${node_count}
+      # vmSize: Standard_D2_v2
+      vmSize: ${vm_size}
+    dnsPrefix: pref-${cluster_resource_name}
+    identity:
+    - type: SystemAssigned
+    location: ${cluster_location}
+    resourceGroupName: ${rg_name}
+    # # In case we had created the RG with CrossPlane:
+    # resourceGroupNameSelector:
+    #   matchLabels:
+    #     testing.upbound.io/example-name: example
+    # tags:
+    #   Environment: Production
+  publishConnectionDetailsTo:
+    # name: kubeconfig-myakscluster01
+    name: kubeconfig-${cluster_resource_name}
+  writeConnectionSecretToRef:
+    # name: kubeconfig-myakscluster01
+    name: kubeconfig-${cluster_resource_name}
+    # namespace: crossplane-system
+    namespace: managed-resources
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}

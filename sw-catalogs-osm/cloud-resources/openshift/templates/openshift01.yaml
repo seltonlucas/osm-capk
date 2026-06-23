@@ -1,0 +1,122 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+---
+# TEMPLATE_PARAMETERS:
+# ===================
+#
+# CLUSTER_KUSTOMIZATION_NAME: Name of the cluster in the ACM management cluster (e.g., for `Kustomization`s).
+# CLUSTER_PROJECT: Name of one of the three projects for the cluster that will be created in the ACM management cluster.
+#
+# PARAMETERS TO PATCH:
+# ===================
+#
+# .spec.postBuild.substitute.cluster_project: Project name to be created
+
+# Cluster projects
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}-ns
+  namespace: managed-resources
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  commonMetadata:
+    labels:
+      cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+  interval: 1h
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/openshift/manifests/namespaces
+  prune: true
+  # force: true
+  wait: true
+  # Input parameters
+  postBuild:
+    substitute:
+      cluster_project: ${CLUSTER_PROJECT}
+---
+# TEMPLATE_PARAMETERS:
+# ===================
+#
+# CLUSTER_KUSTOMIZATION_NAME: Name of the cluster in the management cluster (e.g., for `Kustomization`s).
+# - Alternatively, it can be patched at:
+#   .metadata.name
+#   .metadata.labels.cluster
+#   .spec.commonMetadata.labels.cluster
+#   .spec.postBuild.substitute.cluster_resource_name
+#
+# PARAMETERS TO PATCH:
+# ===================
+#
+# .spec.postBuild.substitute.base_domain: Domain name to use as base.
+# .spec.postBuild.substitute.cluster_name: Name of the cluster in the target cloud. It may differ from `CLUSTER_KUSTOMIZATION_NAME` since naming restrictions are often different from K8s resource naming restrictions (e.g., hyphens vs. underscores).
+# .spec.postBuild.substitute.cluster_project: Project name to use
+# .spec.postBuild.substitute.hosted_cluster_project: Common project name to use for use with all workload clusters.
+# .spec.postBuild.substitute.etcd_volume_size: Volume size of ETCD in Gi
+# .spec.postBuild.substitute.openshift_release: Flavor of worker node VMs.
+# .spec.postBuild.substitute.storage_class: OpenShift StorageClass to use to create volumes.
+# .spec.postBuild.substitute.control_plane_availability: Availability of the contro plane. Valid only SingleReplica or HighAvailability
+# .spec.postBuild.substitute.worker_count: Number of Workers.
+# .spec.postBuild.substitute.worker_cores: CPU count of Workers.
+# .spec.postBuild.substitute.worker_memory: Memory size of Workers in Gi.
+# .spec.postBuild.substitute.worker_volume_size: Volume size of Workers in Gi.
+
+# Cluster resource
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}
+  namespace: managed-resources
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  dependsOn:
+    - name: ${CLUSTER_KUSTOMIZATION_NAME}-ns
+  commonMetadata:
+    labels:
+      cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+  interval: 1h
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/openshift/manifests/cluster
+  prune: true
+  # force: true
+  wait: true
+  # Input parameters
+  postBuild:
+    substitute:
+      base_domain: ${BASE_DOMAIN}
+      cluster_name: ${CLUSTER_NAME}
+      cluster_project: ${CLUSTER_PROJECT}
+      hosted_cluster_project: ${HOSTED_CLUSTER_PROJECT}
+      etcd_volume_size: ${ETCD_VOLUME_SIZE}
+      openshift_release: ${OPENSHIFT_RELEASE}
+      storage_class: ${STORAGE_CLASS}
+      control_plane_availability: ${CONTROL_PLANE_AVAILABILITY}
+      worker_count: ${WORKER_COUNT}
+      worker_cores: ${WORKER_CORES}
+      worker_memory: ${WORKER_MEMORY}
+      worker_volume_size: ${WORKER_VOLUME_SIZE}

@@ -1,0 +1,137 @@
+# syntax=docker/dockerfile:1
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+
+#######################
+# Stage 1: Base stage #
+#######################
+
+FROM python:3.10-alpine AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+##########################################################################################################################################################################
+
+########################
+# Stage 2: Build stage #
+########################
+
+FROM base AS build
+
+ARG COMMON_GERRIT_REFSPEC=master
+ARG IM_GERRIT_REFSPEC=master
+
+# Install required system packages with pinned versions where possible
+RUN apk add --no-cache \
+    build-base \
+    patch \
+    git \
+    zlib-dev \
+    rust \
+    cargo\
+    linux-headers \
+    musl-dev \
+    curl
+
+WORKDIR /app/osm_nbi
+
+# Create virtual environment
+RUN python -m venv /app/osm_nbi/.venv
+ENV PATH="/app/osm_nbi/.venv/bin:$PATH"
+
+# Install OSM dependencies with cache optimization
+RUN git clone --filter=blob:none --tags https://osm.etsi.org/gerrit/osm/common.git /tmp/osm-common && \
+  cd /tmp/osm-common && \
+  git fetch origin ${COMMON_GERRIT_REFSPEC} && \
+  git checkout FETCH_HEAD && \
+  cd - && \
+  pip install --no-cache-dir -r /tmp/osm-common/requirements.txt && \
+  pip install /tmp/osm-common
+
+RUN git clone --filter=blob:none --tags https://osm.etsi.org/gerrit/osm/IM.git /tmp/osm-im && \
+  cd /tmp/osm-im && \
+  git fetch origin ${IM_GERRIT_REFSPEC} && \
+  git checkout FETCH_HEAD && \
+  cd - && \
+  pip install --no-cache-dir -r /tmp/osm-im/requirements.txt && \
+  pip install /tmp/osm-im
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+RUN pip install .
+
+# Clean up
+RUN find /app/osm_nbi -type d -name ".tox" -exec rm -rf {} +
+
+#############################################################################################################################################################################
+
+########################
+# Stage 3: Final stage #
+########################
+
+FROM base AS final
+
+RUN apk add --no-cache \
+    libgcc \
+    libstdc++
+
+WORKDIR /app/osm_nbi
+
+# Create appuser and directories with correct permissions
+RUN addgroup -g 1000 appuser && \
+    adduser -D -G appuser -u 1000 appuser && \
+    mkdir -p /app/storage/kafka /app/log && \
+    chown -R appuser:appuser /app
+
+USER appuser:appuser
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH"
+
+COPY --from=build --chown=appuser:appuser /app/osm_nbi/.venv /app/.venv
+COPY --from=build --chown=appuser:appuser /app/osm_nbi/.venv/lib/python3.10/site-packages/osm_nbi/html_public /app/osm_nbi/html_public
+COPY --from=build --chown=appuser:appuser /app/osm_nbi/.venv/lib/python3.10/site-packages/osm_nbi/nbi.cfg /app/osm_nbi/nbi.cfg
+COPY --from=build --chown=appuser:appuser /app/osm_nbi/.venv/lib/python3.10/site-packages/osm_nbi/http /app/osm_nbi/http
+COPY --from=build --chown=appuser:appuser /app/osm_nbi/.venv/lib/python3.10/site-packages/osm_nbi/templates /app/osm_nbi/templates
+
+EXPOSE 9999
+
+# Configuration environment variables
+ENV OSMNBI_SOCKET_HOST=0.0.0.0 \
+    OSMNBI_SOCKET_PORT=9999 \
+    OSMNBI_STORAGE_PATH=/app/storage \
+    OSMNBI_DATABASE_DRIVER=mongo \
+    OSMNBI_DATABASE_URI=mongodb://mongo:27017 \
+    OSMNBI_STATIC_DIR=/app/osm_nbi/html_public \
+    OSMNBI_MESSAGE_DRIVER=kafka \
+    OSMNBI_MESSAGE_HOST=kafka \
+    OSMNBI_MESSAGE_PORT=9092 \
+    OSMNBI_LOG_FILE=/app/log/nbi.log \
+    OSMNBI_LOG_LEVEL=DEBUG \
+    OSMNBI_AUTHENTICATION_BACKEND=internal \
+    OSMNBI_PROMETHEUS_HOST=prometheus \
+    OSMNBI_PROMETHEUS_PORT=9090
+
+HEALTHCHECK --start-period=120s --interval=10s --timeout=5s --retries=5 \
+    CMD curl -k -f https://localhost:9999/osm/ || exit 1
+
+CMD ["python", "-m", "osm_nbi.nbi"]

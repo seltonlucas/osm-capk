@@ -1,0 +1,36 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  # Repos
+  - fleet-repo.yaml
+  - sw-catalogs-repo.yaml
+
+  # Base cluster structure (CRDs, operators and their configs)
+  - infra-controllers.yaml
+  - infra-configs.yaml
+
+  # Managed resources
+  - managed-resources.yaml
+
+  # Managed apps
+  - apps.yaml
+
+  # Adds also the `flux-system` folder to preserve bootstrap structure
+  - flux-system

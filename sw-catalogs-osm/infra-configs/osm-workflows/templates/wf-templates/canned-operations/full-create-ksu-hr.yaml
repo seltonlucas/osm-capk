@@ -1,0 +1,284 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: full-create-ksu-hr-wtf
+  namespace: osm-workflows
+spec:
+  arguments:
+    parameters:
+    # Fleet repo
+    - name: git_fleet_url
+    - name: fleet_destination_folder
+    - name: git_fleet_cred_secret
+    # SW-Catalogs repo
+    - name: git_sw_catalogs_url
+    - name: sw_catalogs_destination_folder
+    - name: git_sw_catalogs_cred_secret
+    # Specific parameters - Base KSU generation from template
+    ## Relative path from "SW Catalogs" repo root
+    - name: templates_path
+    ## Should substitute environment variables in the template?
+    - name: substitute_environment
+    ## Filter for substitution of environment variables
+    - name: substitution_filter
+    ## Custom environment variables (formatted as .env), to be used for template parametrization
+    - name: custom_env_vars
+    # Specific parameters - Patch HelmRelease in KSU with inline values
+    - name: kustomization_name
+    - name: helmrelease_name
+    - name: inline_values
+    # Specific parameters - Secret generation
+    - name: is_preexisting_secret
+    - name: target_ns
+    - name: age_public_key
+    - name: values_secret_name
+    - name: secret_key
+      value: "values.yaml"
+    ################################################################
+    # This temporary secret should exist already in the `osm-workflows`
+    # namespace and contain the desired secret key-values
+    # in a well-known key (in the example, `creds`).
+    #
+    # For instance:
+    #
+    # creds: |
+    #     jenkinsUser: admin
+    #     jenkinsPassword: myJ3nk1n2P2ssw0rd
+    - name: reference_secret_for_values
+    - name: reference_key_for_values
+    # Specific parameters - Configmap generation
+    - name: is_preexisting_cm
+    - name: values_cm_name
+    - name: cm_key
+      value: "values.yaml"
+    - name: cm_values
+      value: ""
+    # Specific parameters - KSU rendering
+    - name: ksu_name
+    - name: profile_name
+    - name: profile_type
+    - name: project_name
+      value: "osm_admin"
+    # By default, it will re-create the full KSU folder
+    - name: sync
+      version: "true"
+    # Debug/dry run?
+    - name: debug
+      value: "false"
+    - name: dry_run
+      value: "false"
+
+  # Cleanup policy
+  ttlStrategy:
+    secondsAfterCompletion: 6000  # Time to live after workflow is completed, replaces ttlSecondsAfterFinished
+    secondsAfterSuccess: 6000     # Time to live after workflow is successful
+    secondsAfterFailure: 9000     # Time to live after workflow fails
+
+  entrypoint: create-ksu-hr
+
+  templates:
+  # Main template
+  - name: create-ksu-hr
+    inputs:
+      parameters:
+      # Fleet repo
+      - name: git_fleet_url
+      - name: fleet_destination_folder
+      - name: git_fleet_cred_secret
+      # SW-Catalogs repo
+      - name: git_sw_catalogs_url
+      - name: sw_catalogs_destination_folder
+      - name: git_sw_catalogs_cred_secret
+      # Specific parameters - Base KSU generation from template
+      - name: templates_path
+      - name: substitute_environment
+      - name: substitution_filter
+      - name: custom_env_vars
+      # Specific parameters - Patch HelmRelease in KSU with inline values
+      - name: kustomization_name
+      - name: helmrelease_name
+      - name: inline_values
+      # Specific parameters - Secret generation
+      - name: is_preexisting_secret
+      - name: target_ns
+      - name: age_public_key
+      - name: values_secret_name
+      - name: reference_secret_for_values
+      - name: reference_key_for_values
+      - name: secret_key
+      # Specific parameters - Configmap generation
+      - name: is_preexisting_cm
+      - name: values_cm_name
+      - name: cm_key
+      - name: cm_values
+      # Specific parameters - KSU rendering
+      - name: ksu_name
+      - name: profile_name
+      - name: profile_type
+      - name: project_name
+      - name: sync
+      # Debug/dry run?
+      - name: debug
+      - name: dry_run
+
+    steps:
+    # ------ Preparations for transaction
+    - - name: generate-fleet-volume-repo
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'
+      - name: generate-sw-catalogs-volume-repo
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'
+    - - name: clone-fleet
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/fleet"
+          - name: repo_url
+            value: "{{inputs.parameters.git_fleet_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+      - name: clone-sw-catalogs
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/sw-catalogs"
+          - name: repo_url
+            value: "{{inputs.parameters.git_sw_catalogs_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.sw_catalogs_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_sw_catalogs_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-sw-catalogs-volume-repo.outputs.parameters.pvc-name}}'
+    # ------ end of preparations for transaction
+
+    # ------ Transformations
+    - - name: create-ksu-oka-hr
+        templateRef:
+          name: ksu-management-wft
+          template: create-ksu-oka-hr
+        arguments:
+          parameters:
+          # References to required external resources
+          - name: fleet_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: sw_catalogs_volume_name
+            value: '{{steps.generate-sw-catalogs-volume-repo.outputs.parameters.pvc-name}}'
+          # Specific parameters - Base KSU generation from template
+          - name: templates_path
+            value: "{{inputs.parameters.templates_path}}"
+          - name: substitute_environment
+            value: "{{inputs.parameters.substitute_environment}}"
+          - name: substitution_filter
+            value: "{{inputs.parameters.substitution_filter}}"
+          - name: custom_env_vars
+            value: "{{inputs.parameters.custom_env_vars}}"
+          # Specific parameters - Patch HelmRelease in KSU with inline values
+          - name: kustomization_name
+            value: "{{inputs.parameters.kustomization_name}}"
+          - name: helmrelease_name
+            value: "{{inputs.parameters.helmrelease_name}}"
+          - name: inline_values
+            value: "{{inputs.parameters.inline_values}}"
+          # Specific parameters - Secret generation
+          - name: is_preexisting_secret
+            value: "{{inputs.parameters.is_preexisting_secret}}"
+          - name: target_ns
+            value: "{{inputs.parameters.target_ns}}"
+          - name: age_public_key
+            value: "{{inputs.parameters.age_public_key}}"
+          - name: values_secret_name
+            value: "{{inputs.parameters.values_secret_name}}"
+          - name: reference_secret_for_values
+            value: "{{inputs.parameters.reference_secret_for_values}}"
+          - name: reference_key_for_values
+            value: "{{inputs.parameters.reference_key_for_values}}"
+          - name: secret_key
+            value: "{{inputs.parameters.secret_key}}"
+          # Specific parameters - Configmap generation
+          - name: is_preexisting_cm
+            value: "{{inputs.parameters.is_preexisting_cm}}"
+          - name: values_cm_name
+            value: "{{inputs.parameters.values_cm_name}}"
+          - name: cm_key
+            value: "{{inputs.parameters.cm_key}}"
+          - name: cm_values
+            value: "{{inputs.parameters.cm_values}}"
+          # Specific parameters - KSU rendering
+          - name: ksu_name
+            value: "{{inputs.parameters.ksu_name}}"
+          - name: profile_name
+            value: "{{inputs.parameters.profile_name}}"
+          - name: profile_type
+            value: "{{inputs.parameters.profile_type}}"
+          - name: project_name
+            value: "{{inputs.parameters.project_name}}"
+          - name: sync
+            value: "{{inputs.parameters.sync}}"
+          # Debug?
+          - name: debug
+            value: "{{inputs.parameters.debug}}"
+    # ------ end of transformations
+
+    # ------ Commit transaction
+    - - name: push-to-fleet
+        templateRef:
+          name: git-wft
+          template: git-commit-merge-push
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/fleet"
+          - name: repo_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: commit_message
+            value: "Create KSU {{inputs.parameters.ksu_name}} into {{inputs.parameters.profile_name}} profile of {{inputs.parameters.profile_type}} type @ {{inputs.parameters.project_name}} project"
+          - name: main_branch
+            value: main
+          - name: contrib_branch
+            value: osm_contrib
+          - name: dry_run
+            value: "{{inputs.parameters.dry_run}}"
+# ------ end of commit transaction

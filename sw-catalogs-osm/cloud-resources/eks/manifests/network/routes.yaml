@@ -1,0 +1,200 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta2
+kind: Route
+metadata:
+  name: ${cluster_resource_name}-public-route
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+spec:
+  forProvider:
+    region: ${cluster_location}
+    destinationCidrBlock: 0.0.0.0/0
+    gatewayIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: igw
+    routeTableIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: routetable
+        access: public
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta2
+kind: Route
+metadata:
+  name: ${cluster_resource_name}-private-route
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+spec:
+  forProvider:
+    region: ${cluster_location}
+    destinationCidrBlock: 0.0.0.0/0
+    natGatewayIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: natgw
+    routeTableIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: routetable
+        access: private
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTable
+metadata:
+  name: ${cluster_resource_name}-public-route-table
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+    type: routetable
+    access: public
+spec:
+  forProvider:
+    region: ${cluster_location}
+    vpcIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+    tags:
+      Name: ${cluster_name}-public-route-table
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTable
+metadata:
+  name: ${cluster_resource_name}-private-route-table
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+    type: routetable
+    access: private
+spec:
+  forProvider:
+    region: ${cluster_location}
+    vpcIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+    tags:
+      Name: ${cluster_name}-private-route-table
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: ${cluster_resource_name}-public-route-association-1a
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+spec:
+  forProvider:
+    region: ${cluster_location}
+    subnetIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: subnet
+        access: public
+        zone: ${cluster_location}a
+    routeTableIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: routetable
+        access: public
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: ${cluster_resource_name}-private-route-association-1a
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+spec:
+  forProvider:
+    region: ${cluster_location}
+    subnetIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: subnet
+        access: private
+        zone: ${cluster_location}a
+    routeTableIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: routetable
+        access: private
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: ${cluster_resource_name}-private-route-association-1b
+  labels:
+    provider: aws
+    cluster: ${cluster_resource_name}
+spec:
+  forProvider:
+    region: ${cluster_location}
+    subnetIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: subnet
+        access: private
+        zone: ${cluster_location}b
+    routeTableIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+        type: routetable
+        access: private
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}

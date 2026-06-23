@@ -1,0 +1,45 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+# Dedicated MetalLB IP pool for CAPI KubeVirt cluster control-plane LoadBalancer services.
+# This pool (10.7.230.210-10.7.230.220) is separate from the management cluster's own IP
+# so each spawned cluster gets a unique, stable LoadBalancer IP instead of sharing the
+# management node IP via NodePort. MetalLB assigns an IP before kubeadm runs, so CAPI
+# can embed the correct endpoint in certificates from the start.
+#
+# Apply once on the management cluster:
+#   kubectl apply -f capi-lb-pool.yaml
+
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: capi-lb-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - 10.7.230.210-10.7.230.220
+
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: capi-lb-adv
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+  - capi-lb-pool

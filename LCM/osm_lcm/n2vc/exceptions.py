@@ -1,0 +1,219 @@
+# Copyright 2019 Canonical Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+#     Unless required by applicable law or agreed to in writing, software
+#     distributed under the License is distributed on an "AS IS" BASIS,
+#     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#     See the License for the specific language governing permissions and
+#     limitations under the License.
+
+
+class N2VCException(Exception):
+    """
+    N2VC exception base class
+    """
+
+    def __init__(self, message: str = ""):
+        Exception.__init__(self, message)
+        self.message = message
+
+    def __str__(self):
+        return self.message
+
+    def __repr__(self):
+        return "{}({})".format(type(self), self.message)
+
+
+class N2VCBadArgumentsException(N2VCException):
+    """
+    Bad argument values exception
+    """
+
+    def __init__(self, message: str = "", bad_args: list = None):
+        N2VCException.__init__(self, message=message)
+        self.bad_args = bad_args
+
+    def __str__(self):
+        return "<{}> Bad arguments: {} -> {}".format(
+            type(self), super().__str__(), self.bad_args
+        )
+
+
+class N2VCConnectionException(N2VCException):
+    """
+    Error connecting to VCA
+    """
+
+    def __init__(self, message: str = "", url: str = None):
+        N2VCException.__init__(self, message=message)
+        self.url = url
+
+    def __str__(self):
+        return "<{}> Connection to {} failed: {}".format(
+            type(self), self.url, super().__str__()
+        )
+
+
+class N2VCTimeoutException(N2VCException):
+    """
+    Timeout
+    """
+
+    def __init__(self, message: str = "", timeout: str = ""):
+        N2VCException.__init__(self, message=message)
+        self.timeout = timeout
+
+    def __str__(self):
+        return "<{}> {} timeout: {}".format(type(self), self.timeout, super().__str__())
+
+
+class N2VCExecutionException(N2VCException):
+    """
+    Error executing primitive
+    """
+
+    def __init__(self, message: str = "", primitive_name: str = ""):
+        N2VCException.__init__(self, message=message)
+        self.primitive_name = primitive_name
+
+    def __str__(self):
+        return "<{}> Error executing primitive {} failed: {}".format(
+            type(self), self.primitive_name, super().__str__()
+        )
+
+
+class N2VCInvalidCertificate(N2VCException):
+    """
+    Invalid certificate
+    """
+
+    def __init__(self, message: str = ""):
+        N2VCException.__init__(self, message=message)
+
+    def __str__(self):
+        return "<{}> Invalid certificate: {}".format(type(self), super().__str__())
+
+
+class N2VCNotFound(N2VCException):
+    """
+    Not found
+    """
+
+    def __init__(self, message: str = ""):
+        N2VCException.__init__(self, message=message)
+
+    def __str__(self):
+        return "<{}> Not found: {}".format(type(self), super().__str__())
+
+
+class N2VCApplicationExists(N2VCException):
+    """
+    Application Exists
+    """
+
+    def __init__(self, message: str = ""):
+        N2VCException.__init__(self, message=message)
+
+    def __str__(self):
+        return "<{}> Application Exists: {}".format(type(self), super().__str__())
+
+
+class JujuError(N2VCException):
+    """
+    Juju Error
+    """
+
+    def __init__(self, message: str = ""):
+        N2VCException.__init__(self, message=message)
+
+    def __str__(self):
+        return "<{}> Juju Error: {}".format(type(self), super().__str__())
+
+
+class K8sException(Exception):
+    """
+    K8s exception
+    """
+
+    def __init__(self, message: str):
+        Exception.__init__(self, message)
+        self._message = message
+
+    def __str__(self):
+        return self._message
+
+    def __repr__(self):
+        return self._message
+
+
+class EntityInvalidException(Exception):
+    """Entity is not valid, the type does not match any EntityType."""
+
+
+class JujuInvalidK8sConfiguration(N2VCException):
+    """Invalid K8s configuration."""
+
+
+class JujuCharmNotFound(N2VCException):
+    """The Charm can't be found or is not readable."""
+
+
+class JujuControllerFailedConnecting(N2VCException):
+    """Failed connecting to juju controller."""
+
+
+class JujuModelAlreadyExists(N2VCException):
+    """The model already exists."""
+
+
+class JujuApplicationExists(N2VCException):
+    """The Application already exists."""
+
+
+class JujuApplicationNotFound(N2VCException):
+    """The Application cannot be found."""
+
+
+class JujuLeaderUnitNotFound(N2VCException):
+    """The Application cannot be found."""
+
+
+class JujuActionNotFound(N2VCException):
+    """The Action cannot be found."""
+
+
+class JujuMachineNotFound(N2VCException):
+    """The machine cannot be found."""
+
+
+class JujuK8sProxycharmNotSupported(N2VCException):
+    """K8s Proxy Charms not supported in this installation."""
+
+
+class N2VCPrimitiveExecutionFailed(N2VCException):
+    """Something failed while attempting to execute a primitive."""
+
+
+class NetworkServiceDoesNotExist(N2VCException):
+    """The Network Service being acted against does not exist."""
+
+
+class PrimitiveDoesNotExist(N2VCException):
+    """The Primitive being executed does not exist."""
+
+
+class NoRouteToHost(N2VCException):
+    """There was no route to the specified host."""
+
+
+class AuthenticationFailed(N2VCException):
+    """The authentication for the specified user failed."""
+
+
+class MethodNotImplemented(N2VCException):
+    """The method is not implemented."""

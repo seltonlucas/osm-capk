@@ -1,0 +1,65 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${APPNAME}
+  namespace: flux-system
+spec:
+  interval: 1h0m0s
+  path: ./apps/jenkins/manifests
+  prune: true
+  targetNamespace: ${TARGET_NS}
+  wait: true
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  patches:
+    # - target:
+    #     kind: Namespace
+    #     version: v1
+    #     name: jenkins
+    #   patch: |-
+    #     kind: Namespace
+    #     metadata:
+    #       name: ${TARGET_NS}
+    - target:
+        kind: HelmRelease
+        version: v2beta1
+        name: jenkins
+        namespace: jenkins
+      patch: |-
+        - op: replace
+          path: /metadata/name
+          value: ${APPNAME}
+        - op: replace
+          path: /spec/chart/spec/sourceRef/namespace
+          value: ${TARGET_NS}
+        - op: replace
+          path: /spec/targetNamespace
+          value: ${TARGET_NS}
+    - target:
+        kind: HelmRepository
+        version: v2beta1
+        name: bitnamicharts
+        namespace: jenkins
+      patch: |-
+        - op: replace
+          path: /metadata/namespace
+          value: ${TARGET_NS}

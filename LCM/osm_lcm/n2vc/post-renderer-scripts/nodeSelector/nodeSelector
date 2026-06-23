@@ -1,0 +1,48 @@
+#!/bin/bash
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+# Default values for osm.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+dirname="nodeSelector-"$(tr -dc A-Za-z0-9 </dev/urandom | head -c 13)
+
+mkdir /tmp/$dirname && cd /tmp/$dirname
+
+if [ -f /usr/lib/python3/dist-packages/osm_lcm/n2vc/post-renderer-scripts/nodeSelector/kustomization.yaml ]; then
+    cp /usr/lib/python3/dist-packages/osm_lcm/n2vc/post-renderer-scripts/nodeSelector/*.yaml .
+elif [ -f /app/osm_lcm/n2vc/post-renderer-scripts/nodeSelector/kustomization.yaml ]; then
+    cp /app/osm_lcm/n2vc/post-renderer-scripts/nodeSelector/*.yaml .
+else
+    echo "kustomization.yaml not found in expected locations."
+    exit 1
+fi
+
+cat <&0 > all.yaml
+
+IFS=' ' read -r -a labels <<< "$1"
+content=""
+for label in "${labels[@]}"; do
+    key=$(echo "$label" | cut -d':' -f1)
+    value=$(echo "$label" | cut -d':' -f2)
+    content="$content
+        $key: $value"
+done
+
+echo -e "$content" >> nodeSelector-deployment-patch.yaml
+
+kubectl kustomize && cd .. && rm -r /tmp/$dirname

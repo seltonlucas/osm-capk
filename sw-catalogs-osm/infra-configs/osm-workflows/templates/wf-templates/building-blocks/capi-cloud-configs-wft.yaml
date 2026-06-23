@@ -1,0 +1,266 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: capi-cloud-configs-wft
+  namespace: osm-workflows
+spec:
+  templates:
+
+  # Create a CloudConfig for CAPI OpenStack provider
+  - name: create-capi-openstack-cloudconfig
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: openstack_clouds_yaml_secret_name
+      - name: openstack_clouds_yaml_secret_key
+      - name: openstack_cacert_secret_name
+      - name: openstack_cacert_secret_key
+      - name: os_auth_url
+      - name: os_region_name
+      - name: os_username
+      - name: openstack_credentials_secret_name
+      - name: openstack_credentials_secret_key
+      - name: os_project_id
+      - name: os_project_domain_id
+      - name: openstack_cloud_name
+      - name: age_public_key_mgmt
+      - name: mgmt_project_name
+      # Debug?
+      - name: debug
+        value: "false"
+
+      # Other parameters - Do not touch
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: OPENSTACK_CLOUDS_YAML
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.openstack_clouds_yaml_secret_name}}"
+            key: "{{inputs.parameters.openstack_clouds_yaml_secret_key}}"
+          default: ""
+      - name: OPENSTACK_CACERT
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.openstack_cacert_secret_name}}"
+            key: "{{inputs.parameters.openstack_cacert_secret_key}}"
+          default: ""
+      - name: OS_AUTH_URL
+        value: "{{inputs.parameters.os_auth_url}}"
+      - name: OS_REGION_NAME
+        value: "{{inputs.parameters.os_region_name}}"
+      - name: OS_USERNAME
+        value: "{{inputs.parameters.os_username}}"
+      - name: OS_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.openstack_credentials_secret_name}}"
+            key: "{{inputs.parameters.openstack_credentials_secret_key}}"
+          default: ""
+      - name: OS_PROJECT_ID
+        value: "{{inputs.parameters.os_project_id}}"
+      - name: OS_PROJECT_DOMAIN_ID
+        value: "{{inputs.parameters.os_project_domain_id}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_capi_openstack_cloudconf
+      - "{{inputs.parameters.openstack_cloud_name}}"
+      - "{{inputs.parameters.age_public_key_mgmt}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}/{{inputs.parameters.mgmt_project_name}}/infra-config-profiles/{{inputs.parameters.mgmt_cluster_name}}"
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+
+
+  # Update a CloudConfig for CAPI OpenStack provider
+  - name: update-capi-openstack-cloudconfig
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: openstack_clouds_yaml_secret_name
+      - name: openstack_clouds_yaml_secret_key
+      - name: openstack_cacert_secret_name
+      - name: openstack_cacert_secret_key
+      - name: os_auth_url
+      - name: os_region_name
+      - name: os_username
+      - name: openstack_credentials_secret_name
+      - name: openstack_credentials_secret_key
+      - name: os_project_id
+      - name: os_project_domain_id
+      - name: openstack_cloud_name
+      - name: age_public_key_mgmt
+      - name: mgmt_project_name
+      # Debug?
+      - name: debug
+        value: "false"
+
+      # Other parameters - Do not touch
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: OPENSTACK_CLOUDS_YAML
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.openstack_clouds_yaml_secret_name}}"
+            key: "{{inputs.parameters.openstack_clouds_yaml_secret_key}}"
+          default: ""
+      - name: OPENSTACK_CACERT
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.openstack_cacert_secret_name}}"
+            key: "{{inputs.parameters.openstack_cacert_secret_key}}"
+          default: ""
+      - name: OS_AUTH_URL
+        value: "{{inputs.parameters.os_auth_url}}"
+      - name: OS_REGION_NAME
+        value: "{{inputs.parameters.os_region_name}}"
+      - name: OS_USERNAME
+        value: "{{inputs.parameters.os_username}}"
+      - name: OS_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.openstack_credentials_secret_name}}"
+            key: "{{inputs.parameters.openstack_credentials_secret_key}}"
+          default: ""
+      - name: OS_PROJECT_ID
+        value: "{{inputs.parameters.os_project_id}}"
+      - name: OS_PROJECT_DOMAIN_ID
+        value: "{{inputs.parameters.os_project_domain_id}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - update_capi_openstack_cloudconf
+      - "{{inputs.parameters.openstack_cloud_name}}"
+      - "{{inputs.parameters.age_public_key_mgmt}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}/{{inputs.parameters.mgmt_project_name}}/infra-config-profiles/{{inputs.parameters.mgmt_cluster_name}}"
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+
+
+  # Delete a CloudConfig for CAPI OpenStack provider
+  - name: delete-capi-openstack-cloudconfig
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: openstack_cloud_name
+      - name: mgmt_project_name
+      # Debug?
+      - name: debug
+        value: "false"
+
+      # Other parameters - Do not touch
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - delete_capi_openstack_cloudconf
+      - "{{inputs.parameters.openstack_cloud_name}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}/{{inputs.parameters.mgmt_project_name}}/infra-config-profiles/{{inputs.parameters.mgmt_cluster_name}}"
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      fsGroup: 10000

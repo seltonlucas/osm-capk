@@ -1,0 +1,192 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: oka-management-wft
+  namespace: osm-workflows
+spec:
+  templates:
+
+# Create an OKA based on an OKA Package pre-loaded into a pvc
+  - name: create-oka
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: sw_catalogs_volume_name
+      - name: temp_volume_name
+      # Specific parameters - OKA
+      - name: oka_name
+      ## Choose among `infra-controllers`, `infra-configs`, `cloud-resources`, `apps`:
+      - name: oka_type
+      - name: project_name
+        value: "osm_admin"
+      - name: tarball_file
+        value: "true"
+      # Debug?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      - name: temp_volume_mount_path
+        value: "/oka"
+      - name: oka_location
+        value: "/oka"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_oka
+      - "{{inputs.parameters.oka_name}}"
+      - "{{inputs.parameters.oka_type}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.oka_location}}"
+      - "{{inputs.parameters.tarball_file}}"
+      volumeMounts:
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+      - name: temp-volume
+        mountPath: '{{inputs.parameters.temp_volume_mount_path}}'
+    volumes:
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+      - name: temp-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.temp_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+# Update an OKA based on an OKA Package pre-loaded into a pvc
+  - name: update-oka
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: sw_catalogs_volume_name
+      - name: temp_volume_name
+      # Specific parameters - OKA
+      - name: oka_name
+      ## Choose among `infra-controllers`, `infra-configs`, `cloud-resources`, `apps`:
+      - name: oka_type
+      - name: project_name
+        value: "osm_admin"
+      - name: tarball_file
+        value: "true"
+      # Debug?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      - name: temp_volume_mount_path
+        value: "/oka"
+      - name: oka_location
+        value: "/oka"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - update_oka
+      - "{{inputs.parameters.oka_name}}"
+      - "{{inputs.parameters.oka_type}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.oka_location}}"
+      - "{{inputs.parameters.tarball_file}}"
+      volumeMounts:
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+      - name: temp-volume
+        mountPath: '{{inputs.parameters.temp_volume_mount_path}}'
+    volumes:
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+      - name: temp-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.temp_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+# Delete an OKA
+  - name: delete-oka
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: sw_catalogs_volume_name
+      # Specific parameters - OKA
+      - name: oka_name
+      ## Choose among `infra-controllers`, `infra-configs`, `cloud-resources`, `apps`:
+      - name: oka_type
+      - name: project_name
+        value: "osm_admin"
+      # Debug?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - delete_oka
+      - "{{inputs.parameters.oka_name}}"
+      - "{{inputs.parameters.oka_type}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      volumeMounts:
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000

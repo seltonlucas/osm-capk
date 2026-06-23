@@ -1,0 +1,158 @@
+# syntax=docker/dockerfile:1
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+
+#######################
+# Stage 1: Base Stage #
+#######################
+
+FROM python:3.10-alpine AS base
+
+ENV PYTHONUNBUFFERED=1 \
+  PYTHONDONTWRITEBYTECODE=1 \
+  PIP_DISABLE_PIP_VERSION_CHECK=1
+
+
+#################################################################################################################################################################
+
+########################
+# Stage 2: Build Stage #
+########################
+
+FROM base AS build
+
+ENV HELM_VERSION="3.15.1"
+
+# Install required system packages with pinned versions
+RUN apk add --no-cache \
+    build-base \
+    patch \
+    gcc \
+    git \
+    zlib-dev \
+    curl \
+    linux-headers \
+    openssh-client \
+    openssh-keygen \
+    openssl \
+    musl-dev \
+    bash
+
+# Install kubectl with version pinning
+RUN curl -LO "https://dl.k8s.io/release/v1.30.13/bin/linux/amd64/kubectl" \
+    && chmod +x kubectl \
+    && mv kubectl /usr/local/bin/
+
+RUN curl -sSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" -o helm-v${HELM_VERSION}.tar.gz \
+    && tar -zxvf helm-v${HELM_VERSION}.tar.gz \
+    && mv linux-amd64/helm /usr/local/bin/helm3 \
+    && rm -rf linux-amd64 helm-v${HELM_VERSION}.tar.gz
+WORKDIR /app
+
+# Isolate dependencies in a venv
+RUN python -m venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+ARG COMMON_GERRIT_REFSPEC=master
+
+# Install OSM dependency modules with no cache
+RUN git clone --filter=blob:none --tags https://osm.etsi.org/gerrit/osm/common.git /tmp/osm-common \
+    && cd /tmp/osm-common \
+    && git fetch origin "${COMMON_GERRIT_REFSPEC}" \
+    && git checkout FETCH_HEAD \
+    && cd - \
+    && pip install --no-cache-dir -r /tmp/osm-common/requirements.txt \
+    && pip install --no-cache-dir /tmp/osm-common \
+    && rm -rf /tmp/osm-common
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+RUN pip install --no-cache-dir .
+
+RUN find /app -type d -name ".tox" -exec rm -rf {} +
+
+
+#########################################################################################################################################################################
+
+#######################
+# Stage 3: Final Stage#
+#######################
+
+FROM base AS final
+WORKDIR /app
+
+# Install runtime dependencies with pinned versions
+RUN apk add --no-cache \
+    bash \
+    curl \
+    git \
+    openssh-client \
+    openssh-keygen \
+    openssl
+
+COPY --from=build /usr/local/bin/helm3 /usr/local/bin/helm3
+COPY --from=build /usr/local/bin/kubectl /usr/bin/kubectl
+
+RUN addgroup -g 1000 appuser \
+    && adduser -D -G appuser -u 1000 appuser -h /app appuser \
+    && mkdir -p /app/storage/kafka \
+    && mkdir -p /app/log \
+    && chown -R appuser:appuser /app
+
+USER appuser:appuser
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH"
+
+COPY --from=build --chown=appuser:appuser /app/.venv /app/.venv
+COPY --from=build --chown=appuser:appuser /app/osm_lcm/n2vc/post-renderer-scripts/ /app/osm_lcm/n2vc/post-renderer-scripts/
+COPY --from=build --chown=appuser:appuser /app/scripts/ /app/scripts/
+
+EXPOSE 9090
+
+# Environment variables
+ENV OSMLCM_RO_HOST=ro \
+    OSMLCM_RO_PORT=9090 \
+    OSMLCM_RO_TENANT=osm \
+    OSMLCM_VCA_HOST=vca \
+    OSMLCM_VCA_PORT=17070 \
+    OSMLCM_VCA_USER=admin \
+    OSMLCM_VCA_CLOUD=localhost \
+    OSMLCM_VCA_HELMPATH=/usr/local/bin/helm3 \
+    OSMLCM_VCA_KUBECTLPATH=/usr/bin/kubectl \
+    OSMLCM_VCA_JUJUPATH=/usr/local/bin/juju \
+    OSMLCM_DATABASE_DRIVER=mongo \
+    OSMLCM_DATABASE_URI="mongodb://mongo:27017" \
+    OSMLCM_STORAGE_DRIVER=local \
+    OSMLCM_STORAGE_PATH=/app/storage \
+    OSMLCM_MESSAGE_DRIVER=kafka \
+    OSMLCM_MESSAGE_HOST=kafka \
+    OSMLCM_MESSAGE_PORT=9092 \
+    OSMLCM_GLOBAL_LOGLEVEL=DEBUG \
+    OSMLCM_MAINPOSTRENDERERPATH=/app/osm_lcm/n2vc/post-renderer-scripts/mainPostRenderer/mainPostRenderer \
+    OSMLCM_PODLABELSPOSTRENDERERPATH=/app/osm_lcm/n2vc/post-renderer-scripts/podLabels/podLabels \
+    OSMLCM_NODESELECTORPOSTRENDERERPATH=/app/osm_lcm/n2vc/post-renderer-scripts/nodeSelector/nodeSelector \
+    OSMLCM_VCA_STABLEREPOURL=https://charts.helm.sh/stable
+
+HEALTHCHECK --start-period=120s --interval=30s --timeout=30s --retries=3 \
+        CMD python3 -m osm_lcm.lcm_hc || exit 1
+
+# Use JSON notation for CMD
+CMD ["python3", "-m", "osm_lcm.lcm"]
+

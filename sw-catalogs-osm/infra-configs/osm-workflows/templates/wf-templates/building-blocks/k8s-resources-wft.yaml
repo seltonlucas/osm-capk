@@ -1,0 +1,93 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: k8s-resources-wft
+  namespace: osm-workflows
+spec:
+  templates:
+
+  - name: generate-volume
+    serviceAccountName: argo
+    inputs:
+      parameters:
+        - name: pvc-size
+    resource:
+      action: create
+      setOwnerReference: true
+      manifest: |
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          generateName: pvc-osm-
+        spec:
+          accessModes: ['ReadWriteOnce']
+          resources:
+            requests:
+              storage: '{{inputs.parameters.pvc-size}}'
+    outputs:
+      parameters:
+        - name: pvc-name
+          valueFrom:
+            jsonPath: '{.metadata.name}'
+
+  # Wait for a CAPI cluster to reach Provisioned phase, then copy its kubeconfig secret
+  # from the CAPI resources namespace (default: "default") into the managed-resources
+  # namespace so Flux Kustomizations that target the new cluster can reference it.
+  #
+  # The argo ServiceAccount must have RBAC to:
+  #   get/watch clusters.cluster.x-k8s.io in source_namespace
+  #   get secrets in source_namespace
+  #   create/update secrets in target_namespace
+  - name: wait-and-copy-capk-kubeconfig
+    serviceAccountName: argo
+    inputs:
+      parameters:
+      - name: cluster_name
+      - name: cluster_namespace
+        value: "default"
+      - name: source_secret_name
+      - name: target_namespace
+        value: "managed-resources"
+      - name: target_secret_name
+      - name: timeout
+        value: "30m"
+    script:
+      image: bitnami/kubectl:latest
+      command: [bash]
+      source: |
+        set -euo pipefail
+
+        echo "Waiting for CAPI cluster {{inputs.parameters.cluster_name}} in namespace {{inputs.parameters.cluster_namespace}} to reach Provisioned phase..."
+        kubectl wait cluster/{{inputs.parameters.cluster_name}} \
+          -n {{inputs.parameters.cluster_namespace}} \
+          --for=jsonpath='{.status.phase}'=Provisioned \
+          --timeout={{inputs.parameters.timeout}}
+
+        echo "Cluster provisioned. Copying kubeconfig secret..."
+        KUBECONFIG_DATA=$(kubectl get secret {{inputs.parameters.source_secret_name}} \
+          -n {{inputs.parameters.cluster_namespace}} \
+          -o jsonpath='{.data.value}')
+
+        kubectl create secret generic {{inputs.parameters.target_secret_name}} \
+          --from-literal=value="$(echo "${KUBECONFIG_DATA}" | base64 -d)" \
+          -n {{inputs.parameters.target_namespace}} \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        echo "Done: {{inputs.parameters.target_namespace}}/{{inputs.parameters.target_secret_name}} is ready."

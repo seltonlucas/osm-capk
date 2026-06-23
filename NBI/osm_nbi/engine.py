@@ -1,0 +1,657 @@
+# -*- coding: utf-8 -*-
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import logging
+
+# import yaml
+from osm_common import (
+    dbmongo,
+    dbmemory,
+    fslocal,
+    fsmongo,
+    msglocal,
+    msgkafka,
+)
+from osm_common._version import version as common_version
+from osm_common.dbbase import DbException
+from osm_common.fsbase import FsException
+from osm_common.msgbase import MsgException
+from http import HTTPStatus
+
+from osm_nbi.authconn_keystone import AuthconnKeystone
+from osm_nbi.authconn_internal import AuthconnInternal
+from osm_nbi.authconn_tacacs import AuthconnTacacs
+from osm_nbi.base_topic import EngineException, versiontuple
+from osm_nbi.admin_topics import VimAccountTopic, WimAccountTopic, SdnTopic
+from osm_nbi.admin_topics import K8sClusterTopic, K8sRepoTopic, OsmRepoTopic
+from osm_nbi.admin_topics import VcaTopic
+from osm_nbi.admin_topics import UserTopicAuth, ProjectTopicAuth, RoleTopicAuth
+from osm_nbi.descriptor_topics import (
+    VnfdTopic,
+    NsdTopic,
+    PduTopic,
+    NstTopic,
+    VnfPkgOpTopic,
+    NsConfigTemplateTopic,
+)
+from osm_nbi.instance_topics import (
+    NsrTopic,
+    VnfrTopic,
+    NsLcmOpTopic,
+    NsiTopic,
+    NsiLcmOpTopic,
+)
+from osm_nbi.k8s_topics import (
+    ClusterTopic,
+    InfraContTopic,
+    InfraConfTopic,
+    AppProfileTopic,
+    ResourceTopic,
+    ClusterOpsTopic,
+    KsusTopic,
+    AppInstanceTopic,
+    OkaTopic,
+    NodeGroupTopic,
+)
+from osm_nbi.vnf_instance_topics import VnfInstances, VnfLcmOpTopic
+from osm_nbi.pmjobs_topics import PmJobsTopic
+from osm_nbi.subscription_topics import NslcmSubscriptionsTopic
+from osm_nbi.osm_vnfm.vnf_subscription import VnflcmSubscriptionsTopic
+from base64 import b64encode
+from os import urandom  # , path
+from threading import Lock
+
+__author__ = "Alfonso Tierno <alfonso.tiernosepulveda@telefonica.com>"
+min_common_version = "0.1.16"
+
+
+class Engine(object):
+    map_from_topic_to_class = {
+        "vnfds": VnfdTopic,
+        "nsds": NsdTopic,
+        "nsts": NstTopic,
+        "pdus": PduTopic,
+        "nsrs": NsrTopic,
+        "vnfrs": VnfrTopic,
+        "nslcmops": NsLcmOpTopic,
+        "vim_accounts": VimAccountTopic,
+        "wim_accounts": WimAccountTopic,
+        "sdns": SdnTopic,
+        "k8sclusters": K8sClusterTopic,
+        "vca": VcaTopic,
+        "k8srepos": K8sRepoTopic,
+        "osmrepos": OsmRepoTopic,
+        "users": UserTopicAuth,  # Valid for both internal and keystone authentication backends
+        "projects": ProjectTopicAuth,  # Valid for both internal and keystone authentication backends
+        "roles": RoleTopicAuth,  # Valid for both internal and keystone authentication backends
+        "nsis": NsiTopic,
+        "nsilcmops": NsiLcmOpTopic,
+        "vnfpkgops": VnfPkgOpTopic,
+        "nslcm_subscriptions": NslcmSubscriptionsTopic,
+        "vnf_instances": VnfInstances,
+        "vnflcmops": VnfLcmOpTopic,
+        "vnflcm_subscriptions": VnflcmSubscriptionsTopic,
+        "nsconfigtemps": NsConfigTemplateTopic,
+        "cluster": ClusterTopic,
+        "infras_cont": InfraContTopic,
+        "infras_conf": InfraConfTopic,
+        "apps": AppProfileTopic,
+        "resources": ResourceTopic,
+        "clusterops": ClusterOpsTopic,
+        "ksus": KsusTopic,
+        "appinstances": AppInstanceTopic,
+        "oka_packages": OkaTopic,
+        "node_groups": NodeGroupTopic,
+        # [NEW_TOPIC]: add an entry here
+        # "pm_jobs": PmJobsTopic will be added manually because it needs other parameters
+    }
+
+    map_target_version_to_int = {
+        "1.0": 1000,
+        "1.1": 1001,
+        "1.2": 1002,
+        # Add new versions here
+    }
+
+    def __init__(self, authenticator):
+        self.db = None
+        self.fs = None
+        self.msg = None
+        self.authconn = None
+        self.config = None
+        # self.operations = None
+        self.logger = logging.getLogger("nbi.engine")
+        self.map_topic = {}
+        self.write_lock = None
+        # self.token_cache = token_cache
+        self.authenticator = authenticator
+
+    def start(self, config):
+        """
+        Connect to database, filesystem storage, and messaging
+        :param config: two level dictionary with configuration. Top level should contain 'database', 'storage',
+        :return: None
+        """
+        self.config = config
+        # check right version of common
+        if versiontuple(common_version) < versiontuple(min_common_version):
+            raise EngineException(
+                "Not compatible osm/common version '{}'. Needed '{}' or higher".format(
+                    common_version, min_common_version
+                )
+            )
+
+        try:
+            if not self.db:
+                if config["database"]["driver"] == "mongo":
+                    self.db = dbmongo.DbMongo()
+                    self.db.db_connect(config["database"])
+                elif config["database"]["driver"] == "memory":
+                    self.db = dbmemory.DbMemory()
+                    self.db.db_connect(config["database"])
+                else:
+                    raise EngineException(
+                        "Invalid configuration param '{}' at '[database]':'driver'".format(
+                            config["database"]["driver"]
+                        )
+                    )
+            if not self.fs:
+                if config["storage"]["driver"] == "local":
+                    self.fs = fslocal.FsLocal()
+                    self.fs.fs_connect(config["storage"])
+                elif config["storage"]["driver"] == "mongo":
+                    self.fs = fsmongo.FsMongo()
+                    self.fs.fs_connect(config["storage"])
+                else:
+                    raise EngineException(
+                        "Invalid configuration param '{}' at '[storage]':'driver'".format(
+                            config["storage"]["driver"]
+                        )
+                    )
+            if not self.msg:
+                if config["message"]["driver"] == "local":
+                    self.msg = msglocal.MsgLocal()
+                    self.msg.connect(config["message"])
+                elif config["message"]["driver"] == "kafka":
+                    self.msg = msgkafka.MsgKafka()
+                    self.msg.connect(config["message"])
+                else:
+                    raise EngineException(
+                        "Invalid configuration param '{}' at '[message]':'driver'".format(
+                            config["message"]["driver"]
+                        )
+                    )
+            if not self.authconn:
+                if config["authentication"]["backend"] == "keystone":
+                    self.authconn = AuthconnKeystone(
+                        config["authentication"],
+                        self.db,
+                        self.authenticator.role_permissions,
+                    )
+                elif config["authentication"]["backend"] == "tacacs":
+                    self.authconn = AuthconnTacacs(
+                        config["authentication"],
+                        self.db,
+                        self.authenticator.role_permissions,
+                    )
+                else:
+                    self.authconn = AuthconnInternal(
+                        config["authentication"],
+                        self.db,
+                        self.authenticator.role_permissions,
+                    )
+            # if not self.operations:
+            #     if "resources_to_operations" in config["rbac"]:
+            #         resources_to_operations_file = config["rbac"]["resources_to_operations"]
+            #     else:
+            #         possible_paths = (
+            #             __file__[:__file__.rfind("engine.py")] + "resources_to_operations.yml",
+            #             "./resources_to_operations.yml"
+            #         )
+            #         for config_file in possible_paths:
+            #             if path.isfile(config_file):
+            #                 resources_to_operations_file = config_file
+            #                 break
+            #         if not resources_to_operations_file:
+            #             raise EngineException("Invalid permission configuration:"
+            #                 "resources_to_operations file missing")
+            #
+            #     with open(resources_to_operations_file, 'r') as f:
+            #         resources_to_operations = yaml.safeload(f)
+            #
+            #     self.operations = []
+            #
+            #     for _, value in resources_to_operations["resources_to_operations"].items():
+            #         if value not in self.operations:
+            #             self.operations += [value]
+
+            self.write_lock = Lock()
+            # create one class per topic
+            for topic, topic_class in self.map_from_topic_to_class.items():
+                # if self.auth and topic_class in (UserTopicAuth, ProjectTopicAuth):
+                #     self.map_topic[topic] = topic_class(self.db, self.fs, self.msg, self.auth)
+                self.map_topic[topic] = topic_class(
+                    self.db, self.fs, self.msg, self.authconn
+                )
+
+            self.map_topic["pm_jobs"] = PmJobsTopic(
+                self.db,
+                config["prometheus"].get("host"),
+                config["prometheus"].get("port"),
+            )
+        except (DbException, FsException, MsgException) as e:
+            raise EngineException(str(e), http_code=e.http_code)
+
+    def stop(self):
+        try:
+            if self.db:
+                self.db.db_disconnect()
+            if self.fs:
+                self.fs.fs_disconnect()
+            if self.msg:
+                self.msg.disconnect()
+            self.write_lock = None
+        except (DbException, FsException, MsgException) as e:
+            raise EngineException(str(e), http_code=e.http_code)
+
+    def new_item(
+        self, rollback, session, topic, indata=None, kwargs=None, headers=None
+    ):
+        """
+        Creates a new entry into database. For nsds and vnfds it creates an almost empty DISABLED  entry,
+        that must be completed with a call to method upload_content
+        :param rollback: list to append created items at database in case a rollback must to be done
+        :param session: contains the used login username and working project, force to avoid checkins, public
+        :param topic: it can be: users, projects, vim_accounts, sdns, nsrs, nsds, vnfds
+        :param indata: data to be inserted
+        :param kwargs: used to override the indata descriptor
+        :param headers: http request headers
+        :return: _id: identity of the inserted data.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].new(rollback, session, indata, kwargs, headers)
+
+    def add_item(
+        self, rollback, session, topic, indata=None, kwargs=None, headers=None
+    ):
+        """
+        register a cluster in the database.
+        :param rollback: list to append created items at database in case a rollback must to be done
+        :param session: contains the used login username and working project, force to avoid checkins, public
+        :param topic: it can be: cluster for adding cluster into database
+        :param indata: data to be inserted
+        :param kwargs: used to override the indata descriptor
+        :param headers: http request headers
+        :return: _id: identity of the inserted data.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].add(rollback, session, indata, kwargs, headers)
+
+    def upload_content(self, session, topic, _id, indata, kwargs, headers):
+        """
+        Upload content for an already created entry (_id)
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds,
+        :param _id: server id of the item
+        :param indata: data to be inserted
+        :param kwargs: used to override the indata descriptor
+        :param headers: http request headers
+        :return: _id: identity of the inserted data.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].upload_content(
+                session, _id, indata, kwargs, headers
+            )
+
+    def clone(
+        self, rollback, session, topic, _id, indata=None, kwargs=None, headers=None
+    ):
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].clone(
+                rollback, session, _id, indata, kwargs, headers
+            )
+
+    def move_ksu(self, session, topic, _id, indata=None, kwargs=None):
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+
+        with self.write_lock:
+            return self.map_topic[topic].move_ksu(session, _id, indata, kwargs)
+
+    def get_cluster_creds_file(self, session, topic, _id, item, op_id):
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].get_cluster_creds_file(session, _id, item, op_id)
+
+    def get_cluster_creds(self, session, topic, _id, item):
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].get_cluster_creds(session, _id, item)
+
+    def update_item(self, session, topic, _id, item, indata):
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].update_item(session, _id, item, indata)
+
+    def delete_ksu(self, session, topic, _id, indata):
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].delete_ksu(
+                session, _id, indata, not_send_msg=None
+            )
+
+    def get_item_list(self, session, topic, filter_q=None, api_req=False):
+        """
+        Get a list of items
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, ...
+        :param filter_q: filter of data to be applied
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: The list, it can be empty if no one match the filter_q.
+        """
+        self.logger.info("it is getting into item list")
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].list(session, filter_q, api_req)
+
+    def get_item_list_cluster(self, session, topic, filter_q=None, api_req=False):
+        """
+        Get a list of items
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, ...
+        :param filter_q: filter of data to be applied
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: The list, it can be empty if no one match the filter_q.
+        """
+        self.logger.info("it is getting into item list cluster")
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].list_both(session, filter_q, api_req)
+
+    def get_item(self, session, topic, _id, filter_q=None, api_req=False):
+        """
+        Get complete information on an item
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, clusters,
+        :param _id: server id of the item
+        :param filter_q: other arguments
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: dictionary, raise exception if not found.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].show(session, _id, filter_q, api_req)
+
+    def get_one_item(self, session, topic, _id, profile, filter_q=None, api_req=False):
+        """
+        Get complete information on an item
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, clusters profile,
+        :param _id: server id of the item
+        :param profile: contains the profile type
+        :param filter_q: other arguments
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: dictionary, raise exception if not found.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].show_one(session, _id, profile, filter_q, api_req)
+
+    def get_file(self, session, topic, _id, path=None, accept_header=None):
+        """
+        Get descriptor package or artifact file content
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds,
+        :param _id: server id of the item
+        :param path: artifact path or "$DESCRIPTOR" or None
+        :param accept_header: Content of Accept header. Must contain applition/zip or/and text/plain
+        :return: opened file plus Accept format or raises an exception
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].get_file(session, _id, path, accept_header)
+
+    def get_cluster_list_ksu(self, session, topic, filter_q=None, api_req=False):
+        """
+        Get a list of items
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, ...
+        :param filter_q: filter of data to be applied
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: The list, it can be empty if no one match the filter_q.
+        """
+        self.logger.info("it is getting into item list cluster")
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        return self.map_topic[topic].cluster_list_ksu(session, filter_q, api_req)
+
+    def del_item_list(self, session, topic, _filter=None):
+        """
+        Delete a list of items
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, ...
+        :param _filter: filter of data to be applied
+        :return: The deleted list, it can be empty if no one match the _filter.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].delete_list(session, _filter)
+
+    def del_item(self, session, topic, _id, not_send_msg=None):
+        """
+        Delete item by its internal id
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, ...
+        :param _id: server id of the item
+        :param not_send_msg: If False, message will not be sent to kafka.
+            If a list, message is not sent, but content is stored in this variable so that the caller can send this
+            message using its own loop. If None, message is sent
+        :return: dictionary with deleted item _id. It raises exception if not found.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].delete(session, _id, not_send_msg=not_send_msg)
+
+    def remove(self, session, topic, _id, not_send_msg=None):
+        """
+        Delete item by its internal id
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, clusters,
+        :param _id: server id of the item
+        :param not_send_msg: If False, message will not be sent to kafka.
+            If a list, message is not sent, but content is stored in this variable so that the caller can send this
+            message using its own loop. If None, message is sent
+        :return: dictionary with deleted item _id. It raises exception if not found.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].remove(session, _id, not_send_msg=not_send_msg)
+
+    def edit_item(self, session, topic, _id, indata=None, kwargs=None):
+        """
+        Update an existing entry at database
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, ...
+        :param _id: identifier to be updated
+        :param indata: data to be inserted
+        :param kwargs: used to override the indata descriptor
+        :return: dictionary with edited item _id, raise exception if not found.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].edit(session, _id, indata, kwargs)
+
+    def edit(self, session, topic, _id, item, indata=None, kwargs=None):
+        """
+        Update an existing entry at database
+        :param session: contains the used login username and working project
+        :param topic: it can be: users, projects, vnfds, nsds, ...
+        :param _id: identifier to be updated
+        :param item: it shows the type of profiles
+        :param indata: data to be inserted
+        :param kwargs: used to override the indata descriptor
+        :return: dictionary with edited item _id, raise exception if not found.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            return self.map_topic[topic].edit(session, _id, item, indata, kwargs)
+
+    def cancel_item(
+        self, rollback, session, topic, indata=None, kwargs=None, headers=None
+    ):
+        """
+        Cancels an item
+        :param rollback: list to append created items at database in case a rollback must to be done
+        :param session: contains the used login username and working project, force to avoid checkins, public
+        :param topic: it can be: users, projects, vim_accounts, sdns, nsrs, nsds, vnfds
+        :param indata: data to be inserted
+        :param kwargs: used to override the indata descriptor
+        :param headers: http request headers
+        :return: _id: identity of the inserted data.
+        """
+        if topic not in self.map_topic:
+            raise EngineException(
+                "Unknown topic {}!!!".format(topic), HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+        with self.write_lock:
+            self.map_topic[topic].cancel(rollback, session, indata, kwargs, headers)
+
+    def upgrade_db(self, current_version, target_version):
+        if target_version not in self.map_target_version_to_int.keys():
+            raise EngineException(
+                "Cannot upgrade to version '{}' with this version of code".format(
+                    target_version
+                ),
+                http_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+
+        if current_version == target_version:
+            return
+
+        target_version_int = self.map_target_version_to_int[target_version]
+
+        if not current_version:
+            # create database version
+            serial = urandom(32)
+            version_data = {
+                "_id": "version",  # Always "version"
+                "version_int": 1000,  # version number
+                "version": "1.0",  # version text
+                "date": "2018-10-25",  # version date
+                "description": "added serial",  # changes in this version
+                "status": "ENABLED",  # ENABLED, DISABLED (migration in process), ERROR,
+                "serial": b64encode(serial),
+            }
+            self.db.create("admin", version_data)
+            self.db.set_secret_key(serial)
+            current_version = "1.0"
+
+        if (
+            current_version in ("1.0", "1.1")
+            and target_version_int >= self.map_target_version_to_int["1.2"]
+        ):
+            if self.config["authentication"]["backend"] == "internal":
+                self.db.del_list("roles")
+
+            version_data = {
+                "_id": "version",
+                "version_int": 1002,
+                "version": "1.2",
+                "date": "2019-06-11",
+                "description": "set new format for roles_operations",
+            }
+
+            self.db.set_one("admin", {"_id": "version"}, version_data)
+            current_version = "1.2"
+            # TODO add future migrations here
+
+    def init_db(self, target_version="1.0"):
+        """
+        Init database if empty. If not empty it checks that database version and migrates if needed
+        If empty, it creates a new user admin/admin at 'users' and a new entry at 'version'
+        :param target_version: check desired database version. Migrate to it if possible or raises exception
+        :return: None if ok, exception if error or if the version is different.
+        """
+
+        version_data = self.db.get_one(
+            "admin", {"_id": "version"}, fail_on_empty=False, fail_on_more=True
+        )
+        # check database status is ok
+        if version_data and version_data.get("status") != "ENABLED":
+            raise EngineException(
+                "Wrong database status '{}'".format(version_data["status"]),
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+
+        # check version
+        db_version = None if not version_data else version_data.get("version")
+        if db_version != target_version:
+            self.upgrade_db(db_version, target_version)
+
+        return

@@ -1,0 +1,46 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+*** .tox/cover/lib/python3.10/site-packages/pyangbind/lib/yangtypes.py	2023-05-10 06:50:57.876027148 -0400
+--- .tox/cover/lib/python3.10/site-packages/pyangbind/lib/yangtypes.py	2023-05-10 06:51:11.772022417 -0400
+*************** limitations under the License.
+*** 22,27 ****
+--- 22,28 ----
+  from __future__ import unicode_literals
+
+  import collections
++ from six.moves import collections_abc
+  import copy
+  import uuid
+  from decimal import Decimal
+*************** def TypedListType(*args, **kwargs):
+*** 372,378 ****
+    if not isinstance(allowed_type, list):
+      allowed_type = [allowed_type]
+
+!   class TypedList(collections.MutableSequence):
+      _pybind_generated_by = "TypedListType"
+      _list = list()
+
+--- 373,379 ----
+    if not isinstance(allowed_type, list):
+      allowed_type = [allowed_type]
+
+!   class TypedList(collections_abc.MutableSequence):
+      _pybind_generated_by = "TypedListType"
+      _list = list()
+

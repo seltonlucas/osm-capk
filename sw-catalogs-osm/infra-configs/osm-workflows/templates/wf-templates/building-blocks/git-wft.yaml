@@ -1,0 +1,177 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: git-wft
+  namespace: osm-workflows
+spec:
+  templates:
+
+  - name: git-clone
+    inputs:
+      parameters:
+      - name: repo_url
+      - name: destination_folder
+      - name: git_cred_secret
+      - name: git_volume_name
+      - name: mount_path
+    volumes:
+      - name: repos-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.git_volume_name}}'
+    script:
+      image: alpine/git:2.45.1
+      env:
+      - name: GIT_USER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.git_cred_secret}}"
+            key: username
+      - name: GIT_PASS
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.git_cred_secret}}"
+            key: password
+      volumeMounts:
+      - name: repos-volume
+        mountPath: '{{inputs.parameters.mount_path}}'
+      command: ["sh"]
+      source: |
+        FULL_URL="{{inputs.parameters.repo_url}}"
+        DESTINATION="{{inputs.parameters.destination_folder}}"
+        MOUNT_PATH="{{inputs.parameters.mount_path}}"
+
+        echo "Cloning: ${FULL_URL} . . ."
+
+        # Follow recommendation for user auth with git using a script git-creds.sh
+        cat << "EOF" > "${HOME}/git-creds.sh"
+        #!/bin/sh
+        if echo "$1" | grep -q '^Password'; then
+          echo "${GIT_PASS}"
+        else
+          echo "${GIT_USER}"
+        fi
+        exit 0
+        EOF
+        chmod +x "${HOME}/git-creds.sh"
+
+        # Clone into the PVC (mounted at MOUNT_PATH)
+        mkdir -p "${MOUNT_PATH}"
+        cd "${MOUNT_PATH}"
+        if [[ -z "${DESTINATION}" ]]; then
+          TTY=$(tty) GIT_USERNAME="${GIT_USER}" GIT_ASKPASS=~/git-creds.sh git clone "${FULL_URL}"
+        else
+          TTY=$(tty) GIT_USERNAME="${GIT_USER}" GIT_ASKPASS=~/git-creds.sh git clone "${FULL_URL}" "${DESTINATION}"
+        fi
+
+  - name: git-commit-merge-push
+    inputs:
+      parameters:
+      - name: repo_folder
+      - name: git_cred_secret
+      - name: git_volume_name
+      - name: mount_path
+      - name: commit_message
+      - name: main_branch
+        value: main
+      - name: contrib_branch
+        value: osm_contrib
+      - name: dry_run
+        value: false
+    volumes:
+      - name: repos-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.git_volume_name}}'
+    script:
+      image: alpine/git:2.45.1
+      env:
+      - name: GIT_USER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.git_cred_secret}}"
+            key: username
+      - name: GIT_PASS
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.git_cred_secret}}"
+            key: password
+      volumeMounts:
+      - name: repos-volume
+        mountPath: '{{inputs.parameters.mount_path}}'
+      command: ["sh"]
+      source: |
+        DESTINATION="{{inputs.parameters.repo_folder}}"
+        COMMIT_MESSAGE="{{inputs.parameters.commit_message}}"
+        CONTRIB_BRANCH="{{inputs.parameters.contrib_branch}}"
+        MAIN_BRANCH="{{inputs.parameters.main_branch}}"
+        DRY_RUN="{{inputs.parameters.dry_run}}"
+        MOUNT_PATH="{{inputs.parameters.mount_path}}"
+
+        # Follow recommendation for user auth with git using a script git-creds.sh
+        cat << "EOF" > "${HOME}/git-creds.sh"
+        #!/bin/sh
+        if echo "$1" | grep -q '^Password'; then
+          echo "${GIT_PASS}"
+        else
+          echo "${GIT_USER}"
+        fi
+        exit 0
+        EOF
+        chmod +x "${HOME}/git-creds.sh"
+
+        # Go to the repo folder inside the PVC.
+        # DESTINATION may be relative (e.g. "fleet-osm") or absolute (e.g.
+        # "/fleet/fleet-osm" — as LCM passes during cluster register/bootstrap).
+        # git-clone places the repo at the same location, so resolve both forms
+        # the same way to avoid a doubled path like "/fleet//fleet/fleet-osm".
+        case "${DESTINATION}" in
+          /*) REPO_DIR="${DESTINATION}" ;;
+          *)  REPO_DIR="${MOUNT_PATH}/${DESTINATION}" ;;
+        esac
+        cd "${REPO_DIR}"
+
+        # Setup global Git user and email
+        echo "Setting up global Git user and e-mail..."
+        git config --global user.name "${GIT_USER}"
+        git config --global user.email "${GIT_USER}@${GIT_USER}.local"
+
+        # Create contrib branch
+        echo "Creating ${CONTRIB_BRANCH} branch into ${DESTINATION}..."
+        git checkout -b ${CONTRIB_BRANCH}
+
+        # Creating commit
+        git status
+        git add -A
+        git commit -m "Operation ${CONTRIB_BRANCH}: ${COMMIT_MESSAGE}"
+
+        # Pull and merge branch
+        git checkout ${MAIN_BRANCH}
+        echo "Pulling latest commits from ${MAIN_BRANCH} branch (if any)..."
+        TTY=$(tty) GIT_USERNAME="${GIT_USER}" GIT_ASKPASS=~/git-creds.sh git pull
+
+        echo "Merging branch ${CONTRIB_BRANCH} onto ${MAIN_BRANCH}..."
+        git merge --no-ff "${CONTRIB_BRANCH}"
+
+        if [[ "${DRY_RUN}" != "true" ]]
+        then
+          echo "Pushing..."
+          TTY=$(tty) GIT_USERNAME="${GIT_USER}" GIT_ASKPASS=~/git-creds.sh git push origin "${MAIN_BRANCH}"
+        else
+          echo "DRY RUN - NO PUSH"
+        fi

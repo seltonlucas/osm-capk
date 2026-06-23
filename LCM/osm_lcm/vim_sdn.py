@@ -1,0 +1,1806 @@
+# -*- coding: utf-8 -*-
+
+##
+# Copyright 2018 Telefonica S.A.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+##
+
+import yaml
+import asyncio
+import logging
+import logging.handlers
+from osm_lcm import ROclient
+from osm_lcm.lcm_utils import LcmException, LcmBase, deep_get
+from osm_lcm.n2vc.k8s_helm3_conn import K8sHelm3Connector
+from osm_lcm.n2vc.k8s_juju_conn import K8sJujuConnector
+from osm_lcm.n2vc.n2vc_juju_conn import N2VCJujuConnector
+from osm_lcm.n2vc.exceptions import K8sException, N2VCException
+from osm_common.dbbase import DbException
+from copy import deepcopy
+from time import time
+
+__author__ = "Alfonso Tierno"
+
+
+class VimLcm(LcmBase):
+    # values that are encrypted at vim config because they are passwords
+    vim_config_encrypted = {
+        "1.1": ("admin_password", "nsx_password", "vcenter_password"),
+        "default": (
+            "admin_password",
+            "nsx_password",
+            "vcenter_password",
+            "vrops_password",
+        ),
+    }
+
+    def __init__(self, msg, lcm_tasks, config):
+        """
+        Init, Connect to database, filesystem storage, and messaging
+        :param config: two level dictionary with configuration. Top level should contain 'database', 'storage',
+        :return: None
+        """
+
+        self.logger = logging.getLogger("lcm.vim")
+        self.lcm_tasks = lcm_tasks
+        self.ro_config = config["RO"]
+
+        super().__init__(msg, self.logger)
+
+    async def create(self, vim_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'vim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, 'op_id' is None, and lock_HA() will do nothing.
+        # Register 'create' task here for related future HA operations
+        op_id = vim_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("vim", "create", op_id):
+            return
+
+        vim_id = vim_content["_id"]
+        logging_text = "Task vim_create={} ".format(vim_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_vim = None
+        db_vim_update = {}
+        exc = None
+        RO_sdn_id = None
+        try:
+            step = "Getting vim-id='{}' from db".format(vim_id)
+            db_vim = self.db.get_one("vim_accounts", {"_id": vim_id})
+            if vim_content.get("config") and vim_content["config"].get(
+                "sdn-controller"
+            ):
+                step = "Getting sdn-controller-id='{}' from db".format(
+                    vim_content["config"]["sdn-controller"]
+                )
+                db_sdn = self.db.get_one(
+                    "sdns", {"_id": vim_content["config"]["sdn-controller"]}
+                )
+
+                # If the VIM account has an associated SDN account, also
+                # wait for any previous tasks in process for the SDN
+                await self.lcm_tasks.waitfor_related_HA("sdn", "ANY", db_sdn["_id"])
+
+                if (
+                    db_sdn.get("_admin")
+                    and db_sdn["_admin"].get("deployed")
+                    and db_sdn["_admin"]["deployed"].get("RO")
+                ):
+                    RO_sdn_id = db_sdn["_admin"]["deployed"]["RO"]
+                else:
+                    raise LcmException(
+                        "sdn-controller={} is not available. Not deployed at RO".format(
+                            vim_content["config"]["sdn-controller"]
+                        )
+                    )
+
+            step = "Creating vim at RO"
+            db_vim_update["_admin.deployed.RO"] = None
+            db_vim_update["_admin.detailed-status"] = step
+            self.update_db_2("vim_accounts", vim_id, db_vim_update)
+            RO = ROclient.ROClient(**self.ro_config)
+            vim_RO = deepcopy(vim_content)
+            vim_RO.pop("_id", None)
+            vim_RO.pop("_admin", None)
+            schema_version = vim_RO.pop("schema_version", None)
+            vim_RO.pop("schema_type", None)
+            vim_RO.pop("vim_tenant_name", None)
+            vim_RO["type"] = vim_RO.pop("vim_type")
+            vim_RO.pop("vim_user", None)
+            vim_RO.pop("vim_password", None)
+            if RO_sdn_id:
+                vim_RO["config"]["sdn-controller"] = RO_sdn_id
+            desc = await RO.create("vim", descriptor=vim_RO)
+            RO_vim_id = desc["uuid"]
+            db_vim_update["_admin.deployed.RO"] = RO_vim_id
+            self.logger.debug(
+                logging_text + "VIM created at RO_vim_id={}".format(RO_vim_id)
+            )
+
+            step = "Creating vim_account at RO"
+            db_vim_update["_admin.detailed-status"] = step
+            self.update_db_2("vim_accounts", vim_id, db_vim_update)
+
+            if vim_content.get("vim_password"):
+                vim_content["vim_password"] = self.db.decrypt(
+                    vim_content["vim_password"],
+                    schema_version=schema_version,
+                    salt=vim_id,
+                )
+            vim_account_RO = {
+                "vim_tenant_name": vim_content["vim_tenant_name"],
+                "vim_username": vim_content["vim_user"],
+                "vim_password": vim_content["vim_password"],
+            }
+            if vim_RO.get("config"):
+                vim_account_RO["config"] = vim_RO["config"]
+                if "sdn-controller" in vim_account_RO["config"]:
+                    del vim_account_RO["config"]["sdn-controller"]
+                if "sdn-port-mapping" in vim_account_RO["config"]:
+                    del vim_account_RO["config"]["sdn-port-mapping"]
+                vim_config_encrypted_keys = self.vim_config_encrypted.get(
+                    schema_version
+                ) or self.vim_config_encrypted.get("default")
+                for p in vim_config_encrypted_keys:
+                    if vim_account_RO["config"].get(p):
+                        vim_account_RO["config"][p] = self.db.decrypt(
+                            vim_account_RO["config"][p],
+                            schema_version=schema_version,
+                            salt=vim_id,
+                        )
+
+            desc = await RO.attach("vim_account", RO_vim_id, descriptor=vim_account_RO)
+            db_vim_update["_admin.deployed.RO-account"] = desc["uuid"]
+            db_vim_update["_admin.operationalState"] = "ENABLED"
+            db_vim_update["_admin.detailed-status"] = "Done"
+            # Mark the VIM 'create' HA task as successful
+            operation_state = "COMPLETED"
+            operation_details = "Done"
+
+            self.logger.debug(
+                logging_text
+                + "Exit Ok VIM account created at RO_vim_account_id={}".format(
+                    desc["uuid"]
+                )
+            )
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            if exc and db_vim:
+                db_vim_update["_admin.operationalState"] = "ERROR"
+                db_vim_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the VIM 'create' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_vim_update:
+                    self.update_db_2("vim_accounts", vim_id, db_vim_update)
+                # Register the VIM 'create' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "vim",
+                    "create",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+
+            self.lcm_tasks.remove("vim_account", vim_id, order_id)
+
+    async def edit(self, vim_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'vim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, and the HA check always returns True
+        op_id = vim_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("vim", "edit", op_id):
+            return
+
+        vim_id = vim_content["_id"]
+        logging_text = "Task vim_edit={} ".format(vim_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_vim = None
+        exc = None
+        RO_sdn_id = None
+        RO_vim_id = None
+        db_vim_update = {}
+        step = "Getting vim-id='{}' from db".format(vim_id)
+        try:
+            # wait for any previous tasks in process
+            await self.lcm_tasks.waitfor_related_HA("vim", "edit", op_id)
+
+            db_vim = self.db.get_one("vim_accounts", {"_id": vim_id})
+
+            if (
+                db_vim.get("_admin")
+                and db_vim["_admin"].get("deployed")
+                and db_vim["_admin"]["deployed"].get("RO")
+            ):
+                if vim_content.get("config") and vim_content["config"].get(
+                    "sdn-controller"
+                ):
+                    step = "Getting sdn-controller-id='{}' from db".format(
+                        vim_content["config"]["sdn-controller"]
+                    )
+                    db_sdn = self.db.get_one(
+                        "sdns", {"_id": vim_content["config"]["sdn-controller"]}
+                    )
+
+                    # If the VIM account has an associated SDN account, also
+                    # wait for any previous tasks in process for the SDN
+                    await self.lcm_tasks.waitfor_related_HA("sdn", "ANY", db_sdn["_id"])
+
+                    if (
+                        db_sdn.get("_admin")
+                        and db_sdn["_admin"].get("deployed")
+                        and db_sdn["_admin"]["deployed"].get("RO")
+                    ):
+                        RO_sdn_id = db_sdn["_admin"]["deployed"]["RO"]
+                    else:
+                        raise LcmException(
+                            "sdn-controller={} is not available. Not deployed at RO".format(
+                                vim_content["config"]["sdn-controller"]
+                            )
+                        )
+
+                RO_vim_id = db_vim["_admin"]["deployed"]["RO"]
+                step = "Editing vim at RO"
+                RO = ROclient.ROClient(**self.ro_config)
+                vim_RO = deepcopy(vim_content)
+                vim_RO.pop("_id", None)
+                vim_RO.pop("_admin", None)
+                schema_version = vim_RO.pop("schema_version", None)
+                vim_RO.pop("schema_type", None)
+                vim_RO.pop("vim_tenant_name", None)
+                if "vim_type" in vim_RO:
+                    vim_RO["type"] = vim_RO.pop("vim_type")
+                vim_RO.pop("vim_user", None)
+                vim_RO.pop("vim_password", None)
+                if RO_sdn_id:
+                    vim_RO["config"]["sdn-controller"] = RO_sdn_id
+                # TODO make a deep update of sdn-port-mapping
+                if vim_RO:
+                    await RO.edit("vim", RO_vim_id, descriptor=vim_RO)
+
+                step = "Editing vim-account at RO tenant"
+                vim_account_RO = {}
+                if "config" in vim_content:
+                    if "sdn-controller" in vim_content["config"]:
+                        del vim_content["config"]["sdn-controller"]
+                    if "sdn-port-mapping" in vim_content["config"]:
+                        del vim_content["config"]["sdn-port-mapping"]
+                    if not vim_content["config"]:
+                        del vim_content["config"]
+                if "vim_tenant_name" in vim_content:
+                    vim_account_RO["vim_tenant_name"] = vim_content["vim_tenant_name"]
+                if "vim_password" in vim_content:
+                    vim_account_RO["vim_password"] = vim_content["vim_password"]
+                if vim_content.get("vim_password"):
+                    vim_account_RO["vim_password"] = self.db.decrypt(
+                        vim_content["vim_password"],
+                        schema_version=schema_version,
+                        salt=vim_id,
+                    )
+                if "config" in vim_content:
+                    vim_account_RO["config"] = vim_content["config"]
+                if vim_content.get("config"):
+                    vim_config_encrypted_keys = self.vim_config_encrypted.get(
+                        schema_version
+                    ) or self.vim_config_encrypted.get("default")
+                    for p in vim_config_encrypted_keys:
+                        if vim_content["config"].get(p):
+                            vim_account_RO["config"][p] = self.db.decrypt(
+                                vim_content["config"][p],
+                                schema_version=schema_version,
+                                salt=vim_id,
+                            )
+
+                if "vim_user" in vim_content:
+                    vim_content["vim_username"] = vim_content["vim_user"]
+                # vim_account must be edited always even if empty in order to ensure changes are translated to RO
+                # vim_thread. RO will remove and relaunch a new thread for this vim_account
+                await RO.edit("vim_account", RO_vim_id, descriptor=vim_account_RO)
+                db_vim_update["_admin.operationalState"] = "ENABLED"
+                # Mark the VIM 'edit' HA task as successful
+            operation_state = "COMPLETED"
+            operation_details = "Done"
+
+            self.logger.debug(logging_text + "Exit Ok RO_vim_id={}".format(RO_vim_id))
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            if exc and db_vim:
+                db_vim_update["_admin.operationalState"] = "ERROR"
+                db_vim_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the VIM 'edit' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_vim_update:
+                    self.update_db_2("vim_accounts", vim_id, db_vim_update)
+                # Register the VIM 'edit' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "vim",
+                    "edit",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+
+            self.lcm_tasks.remove("vim_account", vim_id, order_id)
+
+    async def delete(self, vim_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'vim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, and the HA check always returns True
+        op_id = vim_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("vim", "delete", op_id):
+            return
+
+        vim_id = vim_content["_id"]
+        logging_text = "Task vim_delete={} ".format(vim_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_vim = None
+        db_vim_update = {}
+        exc = None
+        step = "Getting vim from db"
+        try:
+            # wait for any previous tasks in process
+            await self.lcm_tasks.waitfor_related_HA("vim", "delete", op_id)
+            if not self.ro_config.get("ng"):
+                db_vim = self.db.get_one("vim_accounts", {"_id": vim_id})
+                if (
+                    db_vim.get("_admin")
+                    and db_vim["_admin"].get("deployed")
+                    and db_vim["_admin"]["deployed"].get("RO")
+                ):
+                    RO_vim_id = db_vim["_admin"]["deployed"]["RO"]
+                    RO = ROclient.ROClient(**self.ro_config)
+                    step = "Detaching vim from RO tenant"
+                    try:
+                        await RO.detach("vim_account", RO_vim_id)
+                    except ROclient.ROClientException as e:
+                        if e.http_code == 404:  # not found
+                            self.logger.debug(
+                                logging_text
+                                + "RO_vim_id={} already detached".format(RO_vim_id)
+                            )
+                        else:
+                            raise
+
+                    step = "Deleting vim from RO"
+                    try:
+                        await RO.delete("vim", RO_vim_id)
+                    except ROclient.ROClientException as e:
+                        if e.http_code == 404:  # not found
+                            self.logger.debug(
+                                logging_text
+                                + "RO_vim_id={} already deleted".format(RO_vim_id)
+                            )
+                        else:
+                            raise
+                else:
+                    # nothing to delete
+                    self.logger.debug(logging_text + "Nothing to remove at RO")
+            self.db.del_one("vim_accounts", {"_id": vim_id})
+            db_vim = None
+            self.logger.debug(logging_text + "Exit Ok")
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            self.lcm_tasks.remove("vim_account", vim_id, order_id)
+            if exc and db_vim:
+                db_vim_update["_admin.operationalState"] = "ERROR"
+                db_vim_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the VIM 'delete' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+                self.lcm_tasks.unlock_HA(
+                    "vim",
+                    "delete",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            try:
+                if db_vim and db_vim_update:
+                    self.update_db_2("vim_accounts", vim_id, db_vim_update)
+                # If the VIM 'delete' HA task was succesful, the DB entry has been deleted,
+                # which means that there is nowhere to register this task, so do nothing here.
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("vim_account", vim_id, order_id)
+
+
+class WimLcm(LcmBase):
+    # values that are encrypted at wim config because they are passwords
+    wim_config_encrypted = ()
+
+    def __init__(self, msg, lcm_tasks, config):
+        """
+        Init, Connect to database, filesystem storage, and messaging
+        :param config: two level dictionary with configuration. Top level should contain 'database', 'storage',
+        :return: None
+        """
+
+        self.logger = logging.getLogger("lcm.vim")
+        self.lcm_tasks = lcm_tasks
+        self.ro_config = config["RO"]
+
+        super().__init__(msg, self.logger)
+
+    async def create(self, wim_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'wim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, 'op_id' is None, and lock_HA() will do nothing.
+        # Register 'create' task here for related future HA operations
+        op_id = wim_content.pop("op_id", None)
+        self.lcm_tasks.lock_HA("wim", "create", op_id)
+
+        wim_id = wim_content["_id"]
+        logging_text = "Task wim_create={} ".format(wim_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_wim = None
+        db_wim_update = {}
+        exc = None
+        try:
+            step = "Getting wim-id='{}' from db".format(wim_id)
+            db_wim = self.db.get_one("wim_accounts", {"_id": wim_id})
+            db_wim_update["_admin.deployed.RO"] = None
+
+            step = "Creating wim at RO"
+            db_wim_update["_admin.detailed-status"] = step
+            self.update_db_2("wim_accounts", wim_id, db_wim_update)
+            RO = ROclient.ROClient(**self.ro_config)
+            wim_RO = deepcopy(wim_content)
+            wim_RO.pop("_id", None)
+            wim_RO.pop("_admin", None)
+            schema_version = wim_RO.pop("schema_version", None)
+            wim_RO.pop("schema_type", None)
+            wim_RO.pop("wim_tenant_name", None)
+            wim_RO["type"] = wim_RO.pop("wim_type")
+            wim_RO.pop("wim_user", None)
+            wim_RO.pop("wim_password", None)
+            desc = await RO.create("wim", descriptor=wim_RO)
+            RO_wim_id = desc["uuid"]
+            db_wim_update["_admin.deployed.RO"] = RO_wim_id
+            self.logger.debug(
+                logging_text + "WIM created at RO_wim_id={}".format(RO_wim_id)
+            )
+
+            step = "Creating wim_account at RO"
+            db_wim_update["_admin.detailed-status"] = step
+            self.update_db_2("wim_accounts", wim_id, db_wim_update)
+
+            if wim_content.get("wim_password"):
+                wim_content["wim_password"] = self.db.decrypt(
+                    wim_content["wim_password"],
+                    schema_version=schema_version,
+                    salt=wim_id,
+                )
+            wim_account_RO = {
+                "name": wim_content["name"],
+                "user": wim_content["user"],
+                "password": wim_content["password"],
+            }
+            if wim_RO.get("config"):
+                wim_account_RO["config"] = wim_RO["config"]
+                if "wim_port_mapping" in wim_account_RO["config"]:
+                    del wim_account_RO["config"]["wim_port_mapping"]
+                for p in self.wim_config_encrypted:
+                    if wim_account_RO["config"].get(p):
+                        wim_account_RO["config"][p] = self.db.decrypt(
+                            wim_account_RO["config"][p],
+                            schema_version=schema_version,
+                            salt=wim_id,
+                        )
+
+            desc = await RO.attach("wim_account", RO_wim_id, descriptor=wim_account_RO)
+            db_wim_update["_admin.deployed.RO-account"] = desc["uuid"]
+            db_wim_update["_admin.operationalState"] = "ENABLED"
+            db_wim_update["_admin.detailed-status"] = "Done"
+            # Mark the WIM 'create' HA task as successful
+            operation_state = "COMPLETED"
+            operation_details = "Done"
+
+            self.logger.debug(
+                logging_text
+                + "Exit Ok WIM account created at RO_wim_account_id={}".format(
+                    desc["uuid"]
+                )
+            )
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            if exc and db_wim:
+                db_wim_update["_admin.operationalState"] = "ERROR"
+                db_wim_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the WIM 'create' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_wim_update:
+                    self.update_db_2("wim_accounts", wim_id, db_wim_update)
+                # Register the WIM 'create' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "wim",
+                    "create",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("wim_account", wim_id, order_id)
+
+    async def edit(self, wim_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'wim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, and the HA check always returns True
+        op_id = wim_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("wim", "edit", op_id):
+            return
+
+        wim_id = wim_content["_id"]
+        logging_text = "Task wim_edit={} ".format(wim_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_wim = None
+        exc = None
+        RO_wim_id = None
+        db_wim_update = {}
+        step = "Getting wim-id='{}' from db".format(wim_id)
+        try:
+            # wait for any previous tasks in process
+            await self.lcm_tasks.waitfor_related_HA("wim", "edit", op_id)
+
+            db_wim = self.db.get_one("wim_accounts", {"_id": wim_id})
+
+            if (
+                db_wim.get("_admin")
+                and db_wim["_admin"].get("deployed")
+                and db_wim["_admin"]["deployed"].get("RO")
+            ):
+                RO_wim_id = db_wim["_admin"]["deployed"]["RO"]
+                step = "Editing wim at RO"
+                RO = ROclient.ROClient(**self.ro_config)
+                wim_RO = deepcopy(wim_content)
+                wim_RO.pop("_id", None)
+                wim_RO.pop("_admin", None)
+                schema_version = wim_RO.pop("schema_version", None)
+                wim_RO.pop("schema_type", None)
+                wim_RO.pop("wim_tenant_name", None)
+                if "wim_type" in wim_RO:
+                    wim_RO["type"] = wim_RO.pop("wim_type")
+                wim_RO.pop("wim_user", None)
+                wim_RO.pop("wim_password", None)
+                # TODO make a deep update of wim_port_mapping
+                if wim_RO:
+                    await RO.edit("wim", RO_wim_id, descriptor=wim_RO)
+
+                step = "Editing wim-account at RO tenant"
+                wim_account_RO = {}
+                if "config" in wim_content:
+                    if "wim_port_mapping" in wim_content["config"]:
+                        del wim_content["config"]["wim_port_mapping"]
+                    if not wim_content["config"]:
+                        del wim_content["config"]
+                if "wim_tenant_name" in wim_content:
+                    wim_account_RO["wim_tenant_name"] = wim_content["wim_tenant_name"]
+                if "wim_password" in wim_content:
+                    wim_account_RO["wim_password"] = wim_content["wim_password"]
+                if wim_content.get("wim_password"):
+                    wim_account_RO["wim_password"] = self.db.decrypt(
+                        wim_content["wim_password"],
+                        schema_version=schema_version,
+                        salt=wim_id,
+                    )
+                if "config" in wim_content:
+                    wim_account_RO["config"] = wim_content["config"]
+                if wim_content.get("config"):
+                    for p in self.wim_config_encrypted:
+                        if wim_content["config"].get(p):
+                            wim_account_RO["config"][p] = self.db.decrypt(
+                                wim_content["config"][p],
+                                schema_version=schema_version,
+                                salt=wim_id,
+                            )
+
+                if "wim_user" in wim_content:
+                    wim_content["wim_username"] = wim_content["wim_user"]
+                # wim_account must be edited always even if empty in order to ensure changes are translated to RO
+                # wim_thread. RO will remove and relaunch a new thread for this wim_account
+                await RO.edit("wim_account", RO_wim_id, descriptor=wim_account_RO)
+                db_wim_update["_admin.operationalState"] = "ENABLED"
+                # Mark the WIM 'edit' HA task as successful
+            operation_state = "COMPLETED"
+            operation_details = "Done"
+
+            self.logger.debug(logging_text + "Exit Ok RO_wim_id={}".format(RO_wim_id))
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            if exc and db_wim:
+                db_wim_update["_admin.operationalState"] = "ERROR"
+                db_wim_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the WIM 'edit' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_wim_update:
+                    self.update_db_2("wim_accounts", wim_id, db_wim_update)
+                # Register the WIM 'edit' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "wim",
+                    "edit",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("wim_account", wim_id, order_id)
+
+    async def delete(self, wim_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'vim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, and the HA check always returns True
+        op_id = wim_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("wim", "delete", op_id):
+            return
+
+        wim_id = wim_content["_id"]
+        logging_text = "Task wim_delete={} ".format(wim_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_wim = None
+        db_wim_update = {}
+        exc = None
+        step = "Getting wim from db"
+        try:
+            # wait for any previous tasks in process
+            await self.lcm_tasks.waitfor_related_HA("wim", "delete", op_id)
+
+            db_wim = self.db.get_one("wim_accounts", {"_id": wim_id})
+            if (
+                db_wim.get("_admin")
+                and db_wim["_admin"].get("deployed")
+                and db_wim["_admin"]["deployed"].get("RO")
+            ):
+                RO_wim_id = db_wim["_admin"]["deployed"]["RO"]
+                RO = ROclient.ROClient(**self.ro_config)
+                step = "Detaching wim from RO tenant"
+                try:
+                    await RO.detach("wim_account", RO_wim_id)
+                except ROclient.ROClientException as e:
+                    if e.http_code == 404:  # not found
+                        self.logger.debug(
+                            logging_text
+                            + "RO_wim_id={} already detached".format(RO_wim_id)
+                        )
+                    else:
+                        raise
+
+                step = "Deleting wim from RO"
+                try:
+                    await RO.delete("wim", RO_wim_id)
+                except ROclient.ROClientException as e:
+                    if e.http_code == 404:  # not found
+                        self.logger.debug(
+                            logging_text
+                            + "RO_wim_id={} already deleted".format(RO_wim_id)
+                        )
+                    else:
+                        raise
+            else:
+                # nothing to delete
+                self.logger.error(logging_text + "Nothing to remove at RO")
+            self.db.del_one("wim_accounts", {"_id": wim_id})
+            db_wim = None
+            self.logger.debug(logging_text + "Exit Ok")
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            self.lcm_tasks.remove("wim_account", wim_id, order_id)
+            if exc and db_wim:
+                db_wim_update["_admin.operationalState"] = "ERROR"
+                db_wim_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the WIM 'delete' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+                self.lcm_tasks.unlock_HA(
+                    "wim",
+                    "delete",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            try:
+                if db_wim and db_wim_update:
+                    self.update_db_2("wim_accounts", wim_id, db_wim_update)
+                # If the WIM 'delete' HA task was succesful, the DB entry has been deleted,
+                # which means that there is nowhere to register this task, so do nothing here.
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("wim_account", wim_id, order_id)
+
+
+class SdnLcm(LcmBase):
+    def __init__(self, msg, lcm_tasks, config):
+        """
+        Init, Connect to database, filesystem storage, and messaging
+        :param config: two level dictionary with configuration. Top level should contain 'database', 'storage',
+        :return: None
+        """
+
+        self.logger = logging.getLogger("lcm.sdn")
+        self.lcm_tasks = lcm_tasks
+        self.ro_config = config["RO"]
+
+        super().__init__(msg, self.logger)
+
+    async def create(self, sdn_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'sdn_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, 'op_id' is None, and lock_HA() will do nothing.
+        # Register 'create' task here for related future HA operations
+        op_id = sdn_content.pop("op_id", None)
+        self.lcm_tasks.lock_HA("sdn", "create", op_id)
+
+        sdn_id = sdn_content["_id"]
+        logging_text = "Task sdn_create={} ".format(sdn_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_sdn = None
+        db_sdn_update = {}
+        RO_sdn_id = None
+        exc = None
+        try:
+            step = "Getting sdn from db"
+            db_sdn = self.db.get_one("sdns", {"_id": sdn_id})
+            db_sdn_update["_admin.deployed.RO"] = None
+
+            step = "Creating sdn at RO"
+            db_sdn_update["_admin.detailed-status"] = step
+            self.update_db_2("sdns", sdn_id, db_sdn_update)
+
+            RO = ROclient.ROClient(**self.ro_config)
+            sdn_RO = deepcopy(sdn_content)
+            sdn_RO.pop("_id", None)
+            sdn_RO.pop("_admin", None)
+            schema_version = sdn_RO.pop("schema_version", None)
+            sdn_RO.pop("schema_type", None)
+            sdn_RO.pop("description", None)
+            if sdn_RO.get("password"):
+                sdn_RO["password"] = self.db.decrypt(
+                    sdn_RO["password"], schema_version=schema_version, salt=sdn_id
+                )
+
+            desc = await RO.create("sdn", descriptor=sdn_RO)
+            RO_sdn_id = desc["uuid"]
+            db_sdn_update["_admin.deployed.RO"] = RO_sdn_id
+            db_sdn_update["_admin.operationalState"] = "ENABLED"
+            self.logger.debug(logging_text + "Exit Ok RO_sdn_id={}".format(RO_sdn_id))
+            # Mark the SDN 'create' HA task as successful
+            operation_state = "COMPLETED"
+            operation_details = "Done"
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            if exc and db_sdn:
+                db_sdn_update["_admin.operationalState"] = "ERROR"
+                db_sdn_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the SDN 'create' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_sdn and db_sdn_update:
+                    self.update_db_2("sdns", sdn_id, db_sdn_update)
+                # Register the SDN 'create' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "sdn",
+                    "create",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("sdn", sdn_id, order_id)
+
+    async def edit(self, sdn_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'sdn_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, and the HA check always returns True
+        op_id = sdn_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("sdn", "edit", op_id):
+            return
+
+        sdn_id = sdn_content["_id"]
+        logging_text = "Task sdn_edit={} ".format(sdn_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_sdn = None
+        db_sdn_update = {}
+        exc = None
+        step = "Getting sdn from db"
+        try:
+            # wait for any previous tasks in process
+            await self.lcm_tasks.waitfor_related_HA("sdn", "edit", op_id)
+
+            db_sdn = self.db.get_one("sdns", {"_id": sdn_id})
+            RO_sdn_id = None
+            if (
+                db_sdn.get("_admin")
+                and db_sdn["_admin"].get("deployed")
+                and db_sdn["_admin"]["deployed"].get("RO")
+            ):
+                RO_sdn_id = db_sdn["_admin"]["deployed"]["RO"]
+                RO = ROclient.ROClient(**self.ro_config)
+                step = "Editing sdn at RO"
+                sdn_RO = deepcopy(sdn_content)
+                sdn_RO.pop("_id", None)
+                sdn_RO.pop("_admin", None)
+                schema_version = sdn_RO.pop("schema_version", None)
+                sdn_RO.pop("schema_type", None)
+                sdn_RO.pop("description", None)
+                if sdn_RO.get("password"):
+                    sdn_RO["password"] = self.db.decrypt(
+                        sdn_RO["password"], schema_version=schema_version, salt=sdn_id
+                    )
+                if sdn_RO:
+                    await RO.edit("sdn", RO_sdn_id, descriptor=sdn_RO)
+                db_sdn_update["_admin.operationalState"] = "ENABLED"
+                # Mark the SDN 'edit' HA task as successful
+            operation_state = "COMPLETED"
+            operation_details = "Done"
+
+            self.logger.debug(logging_text + "Exit Ok RO_sdn_id={}".format(RO_sdn_id))
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            if exc and db_sdn:
+                db_sdn["_admin.operationalState"] = "ERROR"
+                db_sdn["_admin.detailed-status"] = "ERROR {}: {}".format(step, exc)
+                # Mark the SDN 'edit' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_sdn_update:
+                    self.update_db_2("sdns", sdn_id, db_sdn_update)
+                # Register the SDN 'edit' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "sdn",
+                    "edit",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("sdn", sdn_id, order_id)
+
+    async def delete(self, sdn_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'vim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, and the HA check always returns True
+        op_id = sdn_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("sdn", "delete", op_id):
+            return
+
+        sdn_id = sdn_content["_id"]
+        logging_text = "Task sdn_delete={} ".format(sdn_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_sdn = {}
+        db_sdn_update = {}
+        exc = None
+        step = "Getting sdn from db"
+        try:
+            # wait for any previous tasks in process
+            await self.lcm_tasks.waitfor_related_HA("sdn", "delete", op_id)
+
+            db_sdn = self.db.get_one("sdns", {"_id": sdn_id})
+            if (
+                db_sdn.get("_admin")
+                and db_sdn["_admin"].get("deployed")
+                and db_sdn["_admin"]["deployed"].get("RO")
+            ):
+                RO_sdn_id = db_sdn["_admin"]["deployed"]["RO"]
+                RO = ROclient.ROClient(**self.ro_config)
+                step = "Deleting sdn from RO"
+                try:
+                    await RO.delete("sdn", RO_sdn_id)
+                except ROclient.ROClientException as e:
+                    if e.http_code == 404:  # not found
+                        self.logger.debug(
+                            logging_text
+                            + "RO_sdn_id={} already deleted".format(RO_sdn_id)
+                        )
+                    else:
+                        raise
+            else:
+                # nothing to delete
+                self.logger.error(
+                    logging_text + "Skipping. There is not RO information at database"
+                )
+            self.db.del_one("sdns", {"_id": sdn_id})
+            db_sdn = {}
+            self.logger.debug("sdn_delete task sdn_id={} Exit Ok".format(sdn_id))
+            return
+
+        except (ROclient.ROClientException, DbException, asyncio.CancelledError) as e:
+            self.logger.error(logging_text + "Exit Exception {}".format(e))
+            exc = e
+        except Exception as e:
+            self.logger.critical(
+                logging_text + "Exit Exception {}".format(e), exc_info=True
+            )
+            exc = e
+        finally:
+            if exc and db_sdn:
+                db_sdn["_admin.operationalState"] = "ERROR"
+                db_sdn["_admin.detailed-status"] = "ERROR {}: {}".format(step, exc)
+                # Mark the SDN 'delete' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+                self.lcm_tasks.unlock_HA(
+                    "sdn",
+                    "delete",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            try:
+                if db_sdn and db_sdn_update:
+                    self.update_db_2("sdns", sdn_id, db_sdn_update)
+                # If the SDN 'delete' HA task was succesful, the DB entry has been deleted,
+                # which means that there is nowhere to register this task, so do nothing here.
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("sdn", sdn_id, order_id)
+
+
+class K8sClusterLcm(LcmBase):
+    timeout_create = 300
+
+    def __init__(self, msg, lcm_tasks, config):
+        """
+        Init, Connect to database, filesystem storage, and messaging
+        :param config: two level dictionary with configuration. Top level should contain 'database', 'storage',
+        :return: None
+        """
+
+        self.logger = logging.getLogger("lcm.k8scluster")
+        self.lcm_tasks = lcm_tasks
+        self.vca_config = config["VCA"]
+
+        super().__init__(msg, self.logger)
+
+        self.helm3_k8scluster = K8sHelm3Connector(
+            kubectl_command=self.vca_config.get("kubectlpath"),
+            helm_command=self.vca_config.get("helm3path"),
+            fs=self.fs,
+            log=self.logger,
+            db=self.db,
+            on_update_db=None,
+        )
+
+        self.juju_k8scluster = K8sJujuConnector(
+            kubectl_command=self.vca_config.get("kubectlpath"),
+            juju_command=self.vca_config.get("jujupath"),
+            log=self.logger,
+            on_update_db=None,
+            db=self.db,
+            fs=self.fs,
+        )
+
+        self.k8s_map = {
+            "helm-chart-v3": self.helm3_k8scluster,
+            "juju-bundle": self.juju_k8scluster,
+        }
+
+    async def create(self, k8scluster_content, order_id):
+        op_id = k8scluster_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("k8scluster", "create", op_id):
+            return
+
+        k8scluster_id = k8scluster_content["_id"]
+        logging_text = "Task k8scluster_create={} ".format(k8scluster_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_k8scluster = None
+        db_k8scluster_update = {}
+        exc = None
+        try:
+            step = "Getting k8scluster-id='{}' from db".format(k8scluster_id)
+            self.logger.debug(logging_text + step)
+            db_k8scluster = self.db.get_one("k8sclusters", {"_id": k8scluster_id})
+            self.db.encrypt_decrypt_fields(
+                db_k8scluster.get("credentials"),
+                "decrypt",
+                ["password", "secret"],
+                schema_version=db_k8scluster["schema_version"],
+                salt=db_k8scluster["_id"],
+            )
+            k8s_credentials = yaml.safe_dump(db_k8scluster.get("credentials"))
+            pending_tasks = []
+            task2name = {}
+            init_target = deep_get(db_k8scluster, ("_admin", "init"))
+            step = "Launching k8scluster init tasks"
+
+            k8s_deploy_methods = db_k8scluster.get("deployment_methods", {})
+            # for backwards compatibility and all-false case
+            if not any(k8s_deploy_methods.values()):
+                k8s_deploy_methods = {
+                    "juju-bundle": True,
+                    "helm-chart-v3": True,
+                }
+            deploy_methods = tuple(filter(k8s_deploy_methods.get, k8s_deploy_methods))
+
+            for task_name in deploy_methods:
+                if init_target and task_name not in init_target:
+                    continue
+                task = asyncio.ensure_future(
+                    self.k8s_map[task_name].init_env(
+                        k8s_credentials,
+                        reuse_cluster_uuid=k8scluster_id,
+                        vca_id=db_k8scluster.get("vca_id"),
+                    )
+                )
+                pending_tasks.append(task)
+                task2name[task] = task_name
+
+            error_text_list = []
+            tasks_name_ok = []
+            reached_timeout = False
+            now = time()
+
+            while pending_tasks:
+                _timeout = max(
+                    1, self.timeout_create - (time() - now)
+                )  # ensure not negative with max
+                step = "Waiting for k8scluster init tasks"
+                done, pending_tasks = await asyncio.wait(
+                    pending_tasks, timeout=_timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+                if not done:
+                    # timeout. Set timeout is reached and process pending as if they hase been finished
+                    done = pending_tasks
+                    pending_tasks = None
+                    reached_timeout = True
+                for task in done:
+                    task_name = task2name[task]
+                    if reached_timeout:
+                        exc = "Timeout"
+                    elif task.cancelled():
+                        exc = "Cancelled"
+                    else:
+                        exc = task.exception()
+
+                    if exc:
+                        error_text_list.append(
+                            "Failing init {}: {}".format(task_name, exc)
+                        )
+                        db_k8scluster_update[
+                            "_admin.{}.error_msg".format(task_name)
+                        ] = str(exc)
+                        db_k8scluster_update["_admin.{}.id".format(task_name)] = None
+                        db_k8scluster_update[
+                            "_admin.{}.operationalState".format(task_name)
+                        ] = "ERROR"
+                        self.logger.error(
+                            logging_text + "{} init fail: {}".format(task_name, exc),
+                            exc_info=not isinstance(exc, (N2VCException, str)),
+                        )
+                    else:
+                        k8s_id, uninstall_sw = task.result()
+                        tasks_name_ok.append(task_name)
+                        self.logger.debug(
+                            logging_text
+                            + "{} init success. id={} created={}".format(
+                                task_name, k8s_id, uninstall_sw
+                            )
+                        )
+                        db_k8scluster_update[
+                            "_admin.{}.error_msg".format(task_name)
+                        ] = None
+                        db_k8scluster_update["_admin.{}.id".format(task_name)] = k8s_id
+                        db_k8scluster_update[
+                            "_admin.{}.created".format(task_name)
+                        ] = uninstall_sw
+                        db_k8scluster_update[
+                            "_admin.{}.operationalState".format(task_name)
+                        ] = "ENABLED"
+                # update database
+                step = "Updating database for " + task_name
+                self.update_db_2("k8sclusters", k8scluster_id, db_k8scluster_update)
+            if tasks_name_ok:
+                operation_details = "ready for " + ", ".join(tasks_name_ok)
+                operation_state = "COMPLETED"
+                db_k8scluster_update["_admin.operationalState"] = (
+                    "ENABLED" if not error_text_list else "DEGRADED"
+                )
+                operation_details += "; " + ";".join(error_text_list)
+            else:
+                db_k8scluster_update["_admin.operationalState"] = "ERROR"
+                operation_state = "FAILED"
+                operation_details = ";".join(error_text_list)
+            db_k8scluster_update["_admin.detailed-status"] = operation_details
+            self.logger.debug(logging_text + "Done. Result: " + operation_state)
+            exc = None
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    LcmException,
+                    DbException,
+                    K8sException,
+                    N2VCException,
+                    asyncio.CancelledError,
+                ),
+            ):
+                self.logger.error(logging_text + "Exit Exception {}".format(e))
+            else:
+                self.logger.critical(
+                    logging_text + "Exit Exception {}".format(e), exc_info=True
+                )
+            exc = e
+        finally:
+            if exc and db_k8scluster:
+                db_k8scluster_update["_admin.operationalState"] = "ERROR"
+                db_k8scluster_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_k8scluster and db_k8scluster_update:
+                    self.update_db_2("k8sclusters", k8scluster_id, db_k8scluster_update)
+
+                # Register the operation and unlock
+                self.lcm_tasks.unlock_HA(
+                    "k8scluster",
+                    "create",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("k8scluster", k8scluster_id, order_id)
+
+    async def edit(self, k8scluster_content, order_id):
+        op_id = k8scluster_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("k8scluster", "edit", op_id):
+            return
+
+        k8scluster_id = k8scluster_content["_id"]
+
+        logging_text = "Task k8scluster_edit={} ".format(k8scluster_id)
+        self.logger.debug(logging_text + "Enter")
+
+        # TODO the implementation is pending and will be part of a new feature
+        # It will support rotation of certificates, update of credentials and K8S API endpoint
+        # At the moment the operation is set as completed
+
+        operation_state = "COMPLETED"
+        operation_details = "Not implemented"
+
+        self.lcm_tasks.unlock_HA(
+            "k8scluster",
+            "edit",
+            op_id,
+            operationState=operation_state,
+            detailed_status=operation_details,
+        )
+        self.lcm_tasks.remove("k8scluster", k8scluster_id, order_id)
+
+    async def delete(self, k8scluster_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'vim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, 'op_id' is None, and lock_HA() will do nothing.
+        # Register 'delete' task here for related future HA operations
+        op_id = k8scluster_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("k8scluster", "delete", op_id):
+            return
+
+        k8scluster_id = k8scluster_content["_id"]
+        logging_text = "Task k8scluster_delete={} ".format(k8scluster_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_k8scluster = None
+        db_k8scluster_update = {}
+        exc = None
+        try:
+            step = "Getting k8scluster='{}' from db".format(k8scluster_id)
+            self.logger.debug(logging_text + step)
+            db_k8scluster = self.db.get_one("k8sclusters", {"_id": k8scluster_id})
+            k8s_h3c_id = deep_get(db_k8scluster, ("_admin", "helm-chart-v3", "id"))
+            k8s_jb_id = deep_get(db_k8scluster, ("_admin", "juju-bundle", "id"))
+
+            cluster_removed = True
+            if k8s_jb_id:  # delete in reverse order of creation
+                step = "Removing juju-bundle '{}'".format(k8s_jb_id)
+                uninstall_sw = (
+                    deep_get(db_k8scluster, ("_admin", "juju-bundle", "created"))
+                    or False
+                )
+                cluster_removed = await self.juju_k8scluster.reset(
+                    cluster_uuid=k8s_jb_id,
+                    uninstall_sw=uninstall_sw,
+                    vca_id=db_k8scluster.get("vca_id"),
+                )
+                db_k8scluster_update["_admin.juju-bundle.id"] = None
+                db_k8scluster_update["_admin.juju-bundle.operationalState"] = "DISABLED"
+
+            if k8s_h3c_id:
+                step = "Removing helm-chart-v3 '{}'".format(k8s_h3c_id)
+                uninstall_sw = (
+                    deep_get(db_k8scluster, ("_admin", "helm-chart-v3", "created"))
+                    or False
+                )
+                cluster_removed = await self.helm3_k8scluster.reset(
+                    cluster_uuid=k8s_h3c_id, uninstall_sw=uninstall_sw
+                )
+                db_k8scluster_update["_admin.helm-chart-v3.id"] = None
+                db_k8scluster_update[
+                    "_admin.helm-chart-v3.operationalState"
+                ] = "DISABLED"
+
+            # Try to remove from cluster_inserted to clean old versions
+            if k8s_h3c_id and cluster_removed:
+                step = "Removing k8scluster='{}' from k8srepos".format(k8scluster_id)
+                self.logger.debug(logging_text + step)
+                db_k8srepo_list = self.db.get_list(
+                    "k8srepos", {"_admin.cluster-inserted": k8s_h3c_id}
+                )
+                for k8srepo in db_k8srepo_list:
+                    try:
+                        cluster_list = k8srepo["_admin"]["cluster-inserted"]
+                        cluster_list.remove(k8s_h3c_id)
+                        self.update_db_2(
+                            "k8srepos",
+                            k8srepo["_id"],
+                            {"_admin.cluster-inserted": cluster_list},
+                        )
+                    except Exception as e:
+                        self.logger.error("{}: {}".format(step, e))
+            self.db.del_one("k8sclusters", {"_id": k8scluster_id})
+            db_k8scluster_update = None
+            self.logger.debug(logging_text + "Done")
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    LcmException,
+                    DbException,
+                    K8sException,
+                    N2VCException,
+                    asyncio.CancelledError,
+                ),
+            ):
+                self.logger.error(logging_text + "Exit Exception {}".format(e))
+            else:
+                self.logger.critical(
+                    logging_text + "Exit Exception {}".format(e), exc_info=True
+                )
+            exc = e
+        finally:
+            if exc and db_k8scluster:
+                db_k8scluster_update["_admin.operationalState"] = "ERROR"
+                db_k8scluster_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the WIM 'create' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            else:
+                operation_state = "COMPLETED"
+                operation_details = "deleted"
+
+            try:
+                if db_k8scluster_update:
+                    self.update_db_2("k8sclusters", k8scluster_id, db_k8scluster_update)
+                # Register the K8scluster 'delete' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "k8scluster",
+                    "delete",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("k8scluster", k8scluster_id, order_id)
+
+
+class VcaLcm(LcmBase):
+    timeout_create = 30
+
+    def __init__(self, msg, lcm_tasks, config):
+        """
+        Init, Connect to database, filesystem storage, and messaging
+        :param config: two level dictionary with configuration. Top level should contain 'database', 'storage',
+        :return: None
+        """
+
+        self.logger = logging.getLogger("lcm.vca")
+        self.lcm_tasks = lcm_tasks
+
+        super().__init__(msg, self.logger)
+
+        # create N2VC connector
+        self.n2vc = N2VCJujuConnector(log=self.logger, fs=self.fs, db=self.db)
+
+    def _get_vca_by_id(self, vca_id: str) -> dict:
+        db_vca = self.db.get_one("vca", {"_id": vca_id})
+        self.db.encrypt_decrypt_fields(
+            db_vca,
+            "decrypt",
+            ["secret", "cacert"],
+            schema_version=db_vca["schema_version"],
+            salt=db_vca["_id"],
+        )
+        return db_vca
+
+    async def _validate_vca(self, db_vca_id: str) -> None:
+        task = asyncio.ensure_future(
+            asyncio.wait_for(
+                self.n2vc.validate_vca(db_vca_id),
+                timeout=self.timeout_create,
+            )
+        )
+        await asyncio.wait([task], return_when=asyncio.FIRST_COMPLETED)
+        if task.exception():
+            raise task.exception()
+
+    def _is_vca_config_update(self, update_options) -> bool:
+        return any(
+            word in update_options.keys()
+            for word in [
+                "cacert",
+                "endpoints",
+                "lxd-cloud",
+                "lxd-credentials",
+                "k8s-cloud",
+                "k8s-credentials",
+                "model-config",
+                "user",
+                "secret",
+            ]
+        )
+
+    async def create(self, vca_content, order_id):
+        op_id = vca_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("vca", "create", op_id):
+            return
+
+        vca_id = vca_content["_id"]
+        self.logger.debug("Task vca_create={} {}".format(vca_id, "Enter"))
+
+        db_vca_update = {}
+
+        operation_state = "FAILED"
+        operation_details = ""
+        try:
+            self.logger.debug(
+                "Task vca_create={} {}".format(vca_id, "Getting vca from db")
+            )
+            db_vca = self._get_vca_by_id(vca_id)
+
+            await self._validate_vca(db_vca["_id"])
+            self.logger.debug(
+                "Task vca_create={} {}".format(
+                    vca_id, "vca registered and validated successfully"
+                )
+            )
+            db_vca_update["_admin.operationalState"] = "ENABLED"
+            db_vca_update["_admin.detailed-status"] = "Connectivity: ok"
+            operation_details = "VCA validated"
+            operation_state = "COMPLETED"
+
+            self.logger.debug(
+                "Task vca_create={} {}".format(
+                    vca_id, "Done. Result: {}".format(operation_state)
+                )
+            )
+
+        except Exception as e:
+            error_msg = "Failed with exception: {}".format(e)
+            self.logger.error("Task vca_create={} {}".format(vca_id, error_msg))
+            db_vca_update["_admin.operationalState"] = "ERROR"
+            db_vca_update["_admin.detailed-status"] = error_msg
+            operation_details = error_msg
+        finally:
+            try:
+                self.update_db_2("vca", vca_id, db_vca_update)
+
+                # Register the operation and unlock
+                self.lcm_tasks.unlock_HA(
+                    "vca",
+                    "create",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(
+                    "Task vca_create={} {}".format(
+                        vca_id, "Cannot update database: {}".format(e)
+                    )
+                )
+            self.lcm_tasks.remove("vca", vca_id, order_id)
+
+    async def edit(self, vca_content, order_id):
+        op_id = vca_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("vca", "edit", op_id):
+            return
+
+        vca_id = vca_content["_id"]
+        self.logger.debug("Task vca_edit={} {}".format(vca_id, "Enter"))
+
+        db_vca = None
+        db_vca_update = {}
+
+        operation_state = "FAILED"
+        operation_details = ""
+        try:
+            self.logger.debug(
+                "Task vca_edit={} {}".format(vca_id, "Getting vca from db")
+            )
+            db_vca = self._get_vca_by_id(vca_id)
+            if self._is_vca_config_update(vca_content):
+                await self._validate_vca(db_vca["_id"])
+                self.logger.debug(
+                    "Task vca_edit={} {}".format(
+                        vca_id, "vca registered and validated successfully"
+                    )
+                )
+                db_vca_update["_admin.operationalState"] = "ENABLED"
+                db_vca_update["_admin.detailed-status"] = "Connectivity: ok"
+
+            operation_details = "Edited"
+            operation_state = "COMPLETED"
+
+            self.logger.debug(
+                "Task vca_edit={} {}".format(
+                    vca_id, "Done. Result: {}".format(operation_state)
+                )
+            )
+
+        except Exception as e:
+            error_msg = "Failed with exception: {}".format(e)
+            self.logger.error("Task vca_edit={} {}".format(vca_id, error_msg))
+            db_vca_update["_admin.operationalState"] = "ERROR"
+            db_vca_update["_admin.detailed-status"] = error_msg
+            operation_state = "FAILED"
+            operation_details = error_msg
+        finally:
+            try:
+                self.update_db_2("vca", vca_id, db_vca_update)
+
+                # Register the operation and unlock
+                self.lcm_tasks.unlock_HA(
+                    "vca",
+                    "edit",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(
+                    "Task vca_edit={} {}".format(
+                        vca_id, "Cannot update database: {}".format(e)
+                    )
+                )
+            self.lcm_tasks.remove("vca", vca_id, order_id)
+
+    async def delete(self, vca_content, order_id):
+        # HA tasks and backward compatibility:
+        # If "vim_content" does not include "op_id", we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, "op_id" is None, and lock_HA() will do nothing.
+        # Register "delete" task here for related future HA operations
+        op_id = vca_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("vca", "delete", op_id):
+            return
+
+        db_vca_update = {}
+        vca_id = vca_content["_id"]
+
+        operation_state = "FAILED"
+        operation_details = ""
+
+        try:
+            self.logger.debug(
+                "Task vca_delete={} {}".format(vca_id, "Deleting vca from db")
+            )
+            self.db.del_one("vca", {"_id": vca_id})
+            db_vca_update = None
+            operation_details = "deleted"
+            operation_state = "COMPLETED"
+
+            self.logger.debug(
+                "Task vca_delete={} {}".format(
+                    vca_id, "Done. Result: {}".format(operation_state)
+                )
+            )
+        except Exception as e:
+            error_msg = "Failed with exception: {}".format(e)
+            self.logger.error("Task vca_delete={} {}".format(vca_id, error_msg))
+            db_vca_update["_admin.operationalState"] = "ERROR"
+            db_vca_update["_admin.detailed-status"] = error_msg
+            operation_details = error_msg
+        finally:
+            try:
+                self.update_db_2("vca", vca_id, db_vca_update)
+                self.lcm_tasks.unlock_HA(
+                    "vca",
+                    "delete",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(
+                    "Task vca_delete={} {}".format(
+                        vca_id, "Cannot update database: {}".format(e)
+                    )
+                )
+            self.lcm_tasks.remove("vca", vca_id, order_id)
+
+
+class K8sRepoLcm(LcmBase):
+    def __init__(self, msg, lcm_tasks, config):
+        """
+        Init, Connect to database, filesystem storage, and messaging
+        :param config: two level dictionary with configuration. Top level should contain 'database', 'storage',
+        :return: None
+        """
+
+        self.logger = logging.getLogger("lcm.k8srepo")
+        self.lcm_tasks = lcm_tasks
+        self.vca_config = config["VCA"]
+
+        super().__init__(msg, self.logger)
+
+        self.k8srepo = K8sHelm3Connector(
+            kubectl_command=self.vca_config.get("kubectlpath"),
+            helm_command=self.vca_config.get("helmpath"),
+            fs=self.fs,
+            log=self.logger,
+            db=self.db,
+            on_update_db=None,
+        )
+
+    async def create(self, k8srepo_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'vim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, 'op_id' is None, and lock_HA() will do nothing.
+        # Register 'create' task here for related future HA operations
+
+        op_id = k8srepo_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("k8srepo", "create", op_id):
+            return
+
+        k8srepo_id = k8srepo_content.get("_id")
+        logging_text = "Task k8srepo_create={} ".format(k8srepo_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_k8srepo = None
+        db_k8srepo_update = {}
+        exc = None
+        operation_state = "COMPLETED"
+        operation_details = ""
+        try:
+            step = "Getting k8srepo-id='{}' from db".format(k8srepo_id)
+            self.logger.debug(logging_text + step)
+            db_k8srepo = self.db.get_one("k8srepos", {"_id": k8srepo_id})
+            db_k8srepo_update["_admin.operationalState"] = "ENABLED"
+        except Exception as e:
+            self.logger.error(
+                logging_text + "Exit Exception {}".format(e),
+                exc_info=not isinstance(
+                    e,
+                    (
+                        LcmException,
+                        DbException,
+                        K8sException,
+                        N2VCException,
+                        asyncio.CancelledError,
+                    ),
+                ),
+            )
+            exc = e
+        finally:
+            if exc and db_k8srepo:
+                db_k8srepo_update["_admin.operationalState"] = "ERROR"
+                db_k8srepo_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the WIM 'create' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_k8srepo_update:
+                    self.update_db_2("k8srepos", k8srepo_id, db_k8srepo_update)
+                # Register the K8srepo 'create' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "k8srepo",
+                    "create",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("k8srepo", k8srepo_id, order_id)
+
+    async def delete(self, k8srepo_content, order_id):
+        # HA tasks and backward compatibility:
+        # If 'vim_content' does not include 'op_id', we a running a legacy NBI version.
+        # In such a case, HA is not supported by NBI, 'op_id' is None, and lock_HA() will do nothing.
+        # Register 'delete' task here for related future HA operations
+        op_id = k8srepo_content.pop("op_id", None)
+        if not self.lcm_tasks.lock_HA("k8srepo", "delete", op_id):
+            return
+
+        k8srepo_id = k8srepo_content.get("_id")
+        logging_text = "Task k8srepo_delete={} ".format(k8srepo_id)
+        self.logger.debug(logging_text + "Enter")
+
+        db_k8srepo = None
+        db_k8srepo_update = {}
+
+        exc = None
+        operation_state = "COMPLETED"
+        operation_details = ""
+        try:
+            step = "Getting k8srepo-id='{}' from db".format(k8srepo_id)
+            self.logger.debug(logging_text + step)
+            db_k8srepo = self.db.get_one("k8srepos", {"_id": k8srepo_id})
+
+        except Exception as e:
+            self.logger.error(
+                logging_text + "Exit Exception {}".format(e),
+                exc_info=not isinstance(
+                    e,
+                    (
+                        LcmException,
+                        DbException,
+                        K8sException,
+                        N2VCException,
+                        asyncio.CancelledError,
+                    ),
+                ),
+            )
+            exc = e
+        finally:
+            if exc and db_k8srepo:
+                db_k8srepo_update["_admin.operationalState"] = "ERROR"
+                db_k8srepo_update["_admin.detailed-status"] = "ERROR {}: {}".format(
+                    step, exc
+                )
+                # Mark the WIM 'create' HA task as erroneous
+                operation_state = "FAILED"
+                operation_details = "ERROR {}: {}".format(step, exc)
+            try:
+                if db_k8srepo_update:
+                    self.update_db_2("k8srepos", k8srepo_id, db_k8srepo_update)
+                # Register the K8srepo 'delete' HA task either
+                # succesful or erroneous, or do nothing (if legacy NBI)
+                self.lcm_tasks.unlock_HA(
+                    "k8srepo",
+                    "delete",
+                    op_id,
+                    operationState=operation_state,
+                    detailed_status=operation_details,
+                )
+                self.db.del_one("k8srepos", {"_id": k8srepo_id})
+            except DbException as e:
+                self.logger.error(logging_text + "Cannot update database: {}".format(e))
+            self.lcm_tasks.remove("k8srepo", k8srepo_id, order_id)

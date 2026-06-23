@@ -1,0 +1,212 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: full-bootstrap-cluster-wft
+  namespace: osm-workflows
+
+spec:
+  arguments:
+    parameters:
+
+    # Fleet repo
+    - name: git_fleet_url
+    - name: fleet_destination_folder
+    - name: git_fleet_cred_secret
+
+    # SW-Catalogs repo
+    - name: git_sw_catalogs_url
+    - name: sw_catalogs_destination_folder
+    - name: git_sw_catalogs_cred_secret
+
+    # Specific parameters - Bootstrap
+    - name: cluster_name
+    - name: cluster_kustomization_name
+    - name: public_key_mgmt
+    - name: public_key_new_cluster
+    - name: secret_name_private_age_key_for_new_cluster
+    - name: key_name_in_secret
+      value: "agekey"
+    - name: templates_dir
+      value: "/sw-catalogs/sw-catalogs-osm/cloud-resources/flux-remote-bootstrap/cluster-base/templates"
+
+    # Recommended to keep this default
+    - name: imported_cluster
+      value: "true"
+
+    # Debug/dry run?
+    - name: debug
+      value: "false"
+    - name: dry_run
+      value: "false"
+
+
+  # # Cleanup policy
+  # ttlStrategy:
+  #   secondsAfterCompletion: 100 # Time to live after workflow is completed, replaces ttlSecondsAfterFinished
+  #   secondsAfterSuccess: 50     # Time to live after workflow is successful
+  #   secondsAfterFailure: 50     # Time to live after workflow fails
+
+  entrypoint: bootstrap-cluster
+
+  templates:
+
+  # Main template
+  - name: bootstrap-cluster
+    inputs:
+      parameters:
+      # Git repos
+      - name: git_fleet_url
+      - name: fleet_destination_folder
+      - name: git_fleet_cred_secret
+      - name: git_sw_catalogs_url
+      - name: sw_catalogs_destination_folder
+      - name: git_sw_catalogs_cred_secret
+
+      # Specific parameters - Bootstrap
+      - name: cluster_name
+      - name: cluster_kustomization_name
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+      - name: imported_cluster
+      - name: templates_dir
+
+      # Debugging
+      - name: debug
+      - name: dry_run
+    steps:
+
+    # ------ Preparations for transaction
+    - - name: generate-fleet-volume-repo
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'
+      - name: generate-sw-catalogs-volume-repo
+        templateRef:
+          name: k8s-resources-wft
+          template: generate-volume
+        arguments:
+          parameters:
+            - name: pvc-size
+              value: '100Mi'
+    - - name: clone-fleet
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/fleet"
+          - name: repo_url
+            value: "{{inputs.parameters.git_fleet_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+      - name: clone-sw-catalogs
+        templateRef:
+          name: git-wft
+          template: git-clone
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/sw-catalogs"
+          - name: repo_url
+            value: "{{inputs.parameters.git_sw_catalogs_url}}"
+          - name: destination_folder
+            value: "{{inputs.parameters.sw_catalogs_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_sw_catalogs_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-sw-catalogs-volume-repo.outputs.parameters.pvc-name}}'
+    # ------ end of preparations for transaction
+
+    # ------ Transformations
+    # Bootstrap the remote cluster
+    - - name: bootstrap-cluster
+        templateRef:
+          name: cluster-management-wft
+          template: bootstrap-remote-cluster
+        arguments:
+          parameters:
+          # Volumes with cloned repos
+          - name: fleet_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: fleet_mount_path
+            value: "/fleet"
+          - name: sw_catalogs_volume_name
+            value: '{{steps.generate-sw-catalogs-volume-repo.outputs.parameters.pvc-name}}'
+          - name: sw_catalogs_mount_path
+            value: "/sw-catalogs"
+
+          # Specific parameters
+          - name: cluster_name
+            value: "{{inputs.parameters.cluster_name}}"
+          - name: cluster_kustomization_name
+            value: "{{inputs.parameters.cluster_kustomization_name}}"
+          - name: public_key_mgmt
+            value: "{{inputs.parameters.public_key_mgmt}}"
+          - name: public_key_new_cluster
+            value: "{{inputs.parameters.public_key_new_cluster}}"
+          - name: secret_name_private_age_key_for_new_cluster
+            value: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+          - name: key_name_in_secret
+            value: "{{inputs.parameters.key_name_in_secret}}"
+          - name: fleet_repo_url
+            value: "{{inputs.parameters.git_fleet_url}}"
+          - name: sw_catalogs_repo_url
+            value: "{{inputs.parameters.git_sw_catalogs_url}}"
+          - name: imported_cluster
+            value: "{{inputs.parameters.imported_cluster}}"
+          - name: templates_dir
+            value: "{{inputs.parameters.templates_dir}}"
+    # ------ end of transformations
+
+    # ------ Commit transaction
+    - - name: push-to-fleet
+        templateRef:
+          name: git-wft
+          template: git-commit-merge-push
+        arguments:
+          parameters:
+          - name: mount_path
+            value: "/fleet"
+          - name: repo_folder
+            value: "{{inputs.parameters.fleet_destination_folder}}"
+          - name: git_cred_secret
+            value: "{{inputs.parameters.git_fleet_cred_secret}}"
+          - name: git_volume_name
+            value: '{{steps.generate-fleet-volume-repo.outputs.parameters.pvc-name}}'
+          - name: commit_message
+            value: "Bootstrap imported cluster {{inputs.parameters.cluster_kustomization_name}}"
+          - name: main_branch
+            value: main
+          - name: contrib_branch
+            value: osm_contrib
+          - name: dry_run
+            value: "{{inputs.parameters.dry_run}}"
+# ------ end of commit transaction

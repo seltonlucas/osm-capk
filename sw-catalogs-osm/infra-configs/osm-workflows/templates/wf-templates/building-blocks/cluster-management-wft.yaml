@@ -1,0 +1,1239 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: cluster-management-wft
+  namespace: osm-workflows
+spec:
+  templates:
+
+  # Create a PaaS cluster using CrossPlane (any cloud)
+  - name: create-crossplane-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: cluster_name
+      ## As of today, one among `aks`, `eks` or `gke`:
+      - name: cluster_type
+      - name: providerconfig_name
+      - name: vm_size
+      - name: node_count
+      - name: cluster_location
+      - name: k8s_version
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## Do we want to skip OSM's bootstrap?
+      - name: skip_bootstrap
+        value: "false"
+      ## AKS only (otherwise, empty)
+      - name: rg_name
+        values: ""
+      ## GKE only (otherwise, empty)
+      - name: preemptible_nodes
+        values: "false"
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      ## EKS only (otherwise, empty)
+      - name: cluster_iam_role
+      - name: cluster_private_subnets_id
+      - name: cluster_public_subnets_id
+      - name: cluster_subnets_configmap_name
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_crossplane_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.cluster_type}}"
+      - "{{inputs.parameters.providerconfig_name}}"
+      - "{{inputs.parameters.vm_size}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.cluster_location}}"
+      - "{{inputs.parameters.k8s_version}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.rg_name}}"
+      - "{{inputs.parameters.preemptible_nodes}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      - "{{inputs.parameters.skip_bootstrap}}"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - "{{inputs.parameters.cluster_iam_role}}"
+      - "{{inputs.parameters.cluster_private_subnets_id}}"
+      - "{{inputs.parameters.cluster_public_subnets_id}}"
+      - "{{inputs.parameters.cluster_subnets_configmap_name}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Update a PaaS cluster created using CrossPlane (any cloud)
+  - name: update-crossplane-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: cluster_name
+      ## As of today, one among `aks`, `eks` or `gke`:
+      - name: cluster_type
+      - name: providerconfig_name
+      - name: vm_size
+      - name: node_count
+      - name: cluster_location
+      - name: k8s_version
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## AKS only (otherwise, empty)
+      - name: rg_name
+        values: ""
+      ## GKE only (otherwise, empty)
+      - name: preemptible_nodes
+        values: "false"
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - update_crossplane_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.cluster_type}}"
+      - "{{inputs.parameters.providerconfig_name}}"
+      - "{{inputs.parameters.vm_size}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.cluster_location}}"
+      - "{{inputs.parameters.k8s_version}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.rg_name}}"
+      - "{{inputs.parameters.preemptible_nodes}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      ## Note that during upgrades, OSM's bootstrap is avoided:
+      - "true"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Create a PaaS cluster using CAPI (Openstack)
+  - name: create-capi-openstack-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: cluster_name
+      - name: vm_size
+      - name: node_count
+      - name: k8s_version
+      - name: providerconfig_name
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## CAPI and CAPI Openstack specific parameters
+      - name: control_plane_vm_size
+        value: ""
+      - name: control_plane_node_count
+        value: ""
+      - name: openstack_dns_nameservers
+        value: ""
+      - name: openstack_external_network_id
+        value: ""
+      - name: openstack_failure_domain
+        value: ""
+      - name: openstack_ssh_key_name
+        value: ""
+      - name: cluster_cni
+        value: ""
+      - name: openstack_worker_image_name
+        value: ""
+      - name: openstack_control_plane_image_name
+        value: ""
+      - name: capo_resources_namespace
+        value: "managed-resources"
+      ## Do we want to skip OSM's bootstrap?
+      - name: skip_bootstrap
+        value: "false"
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources/capi"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_capi_openstack_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.vm_size}}"
+      - "{{inputs.parameters.control_plane_vm_size}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.control_plane_node_count}}"
+      - "{{inputs.parameters.k8s_version}}"
+      - "{{inputs.parameters.providerconfig_name}}"
+      - "{{inputs.parameters.openstack_dns_nameservers}}"
+      - "{{inputs.parameters.openstack_external_network_id}}"
+      - "{{inputs.parameters.openstack_failure_domain}}"
+      - "{{inputs.parameters.openstack_ssh_key_name}}"
+      - "{{inputs.parameters.cluster_cni}}"
+      - "{{inputs.parameters.openstack_worker_image_name}}"
+      - "{{inputs.parameters.openstack_control_plane_image_name}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      - "{{inputs.parameters.skip_bootstrap}}"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - '{{inputs.parameters.capo_resources_namespace}}'
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Create a self-hosted cluster using CAPI + KubeVirt (runs nested VMs on the management cluster)
+  - name: create-capi-kubevirt-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: cluster_name
+      - name: node_count
+      - name: k8s_version
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## CAPI KubeVirt specific parameters
+      - name: control_plane_node_count
+        value: "1"
+      - name: kubevirt_host
+        value: ""
+      - name: kubevirt_cp_port
+        value: "30445"
+      - name: metallb_shared_ip_key
+        value: "shared-osm-pool"
+      - name: control_plane_cpu_cores
+        value: "2"
+      - name: control_plane_memory
+        value: "4Gi"
+      - name: control_plane_ephemeral_storage
+        value: "2Gi"
+      - name: worker_cpu_cores
+        value: "2"
+      - name: worker_memory
+        value: "4Gi"
+      - name: worker_ephemeral_storage
+        value: "2Gi"
+      - name: vm_image
+        value: ""
+      - name: pod_cidr
+        value: "10.243.0.0/16"
+      - name: service_cidr
+        value: "10.95.0.0/16"
+      - name: cluster_cni
+        value: ""
+      - name: capk_resources_namespace
+        value: "default"
+      ## Do we want to skip OSM's bootstrap?
+      - name: skip_bootstrap
+        value: "false"
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources/capi"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_capi_kubevirt_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.control_plane_node_count}}"
+      - "{{inputs.parameters.k8s_version}}"
+      - "{{inputs.parameters.kubevirt_host}}"
+      - "{{inputs.parameters.kubevirt_cp_port}}"
+      - "{{inputs.parameters.metallb_shared_ip_key}}"
+      - "{{inputs.parameters.control_plane_cpu_cores}}"
+      - "{{inputs.parameters.control_plane_memory}}"
+      - "{{inputs.parameters.control_plane_ephemeral_storage}}"
+      - "{{inputs.parameters.worker_cpu_cores}}"
+      - "{{inputs.parameters.worker_memory}}"
+      - "{{inputs.parameters.worker_ephemeral_storage}}"
+      - "{{inputs.parameters.vm_image}}"
+      - "{{inputs.parameters.pod_cidr}}"
+      - "{{inputs.parameters.service_cidr}}"
+      - "{{inputs.parameters.cluster_cni}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      - "{{inputs.parameters.skip_bootstrap}}"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - "{{inputs.parameters.capk_resources_namespace}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+      - name: capk-scripts
+        mountPath: /app/scripts/library/krm-functions.rc
+        subPath: krm-functions.rc
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+      - name: capk-scripts
+        configMap:
+          name: osm-krm-functions-capk-scripts
+    securityContext:
+      runAsUser: 10000
+
+
+  # Update a self-hosted cluster created using CAPI + KubeVirt
+  - name: update-capi-kubevirt-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: cluster_name
+      - name: node_count
+      - name: k8s_version
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## CAPI KubeVirt specific parameters
+      - name: control_plane_node_count
+        value: "1"
+      - name: kubevirt_host
+        value: ""
+      - name: kubevirt_cp_port
+        value: "30445"
+      - name: metallb_shared_ip_key
+        value: "shared-osm-pool"
+      - name: control_plane_cpu_cores
+        value: "2"
+      - name: control_plane_memory
+        value: "4Gi"
+      - name: control_plane_ephemeral_storage
+        value: "2Gi"
+      - name: worker_cpu_cores
+        value: "2"
+      - name: worker_memory
+        value: "4Gi"
+      - name: worker_ephemeral_storage
+        value: "2Gi"
+      - name: vm_image
+        value: ""
+      - name: pod_cidr
+        value: "10.243.0.0/16"
+      - name: service_cidr
+        value: "10.95.0.0/16"
+      - name: cluster_cni
+        value: ""
+      - name: capk_resources_namespace
+        value: "default"
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources/capi"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - update_capi_kubevirt_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.control_plane_node_count}}"
+      - "{{inputs.parameters.k8s_version}}"
+      - "{{inputs.parameters.kubevirt_host}}"
+      - "{{inputs.parameters.kubevirt_cp_port}}"
+      - "{{inputs.parameters.metallb_shared_ip_key}}"
+      - "{{inputs.parameters.control_plane_cpu_cores}}"
+      - "{{inputs.parameters.control_plane_memory}}"
+      - "{{inputs.parameters.control_plane_ephemeral_storage}}"
+      - "{{inputs.parameters.worker_cpu_cores}}"
+      - "{{inputs.parameters.worker_memory}}"
+      - "{{inputs.parameters.worker_ephemeral_storage}}"
+      - "{{inputs.parameters.vm_image}}"
+      - "{{inputs.parameters.pod_cidr}}"
+      - "{{inputs.parameters.service_cidr}}"
+      - "{{inputs.parameters.cluster_cni}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      ## Note that during upgrades, OSM's bootstrap is avoided:
+      - "true"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - "{{inputs.parameters.capk_resources_namespace}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+      - name: capk-scripts
+        mountPath: /app/scripts/library/krm-functions.rc
+        subPath: krm-functions.rc
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+      - name: capk-scripts
+        configMap:
+          name: osm-krm-functions-capk-scripts
+    securityContext:
+      runAsUser: 10000
+
+
+  # Update a PaaS cluster created using CAPI (Openstack)
+  - name: update-capi-openstack-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: cluster_name
+      - name: vm_size
+      - name: node_count
+      - name: k8s_version
+      - name: providerconfig_name
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## CAPI and CAPI Openstack specific parameters
+      - name: control_plane_vm_size
+        value: ""
+      - name: control_plane_node_count
+        value: ""
+      - name: openstack_dns_nameservers
+        value: ""
+      - name: openstack_external_network_id
+        value: ""
+      - name: openstack_failure_domain
+        value: ""
+      - name: openstack_ssh_key_name
+        value: ""
+      - name: cluster_cni
+        value: ""
+      - name: openstack_worker_image_name
+        value: ""
+      - name: openstack_control_plane_image_name
+        value: ""
+      - name: capo_resources_namespace
+        value: "managed-resources"
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_cluster_name
+        value: "_management"
+      - name: base_templates_path
+        value: "cloud-resources/capi"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - update_capi_openstack_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.vm_size}}"
+      - "{{inputs.parameters.control_plane_vm_size}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.control_plane_node_count}}"
+      - "{{inputs.parameters.k8s_version}}"
+      - "{{inputs.parameters.providerconfig_name}}"
+      - "{{inputs.parameters.openstack_dns_nameservers}}"
+      - "{{inputs.parameters.openstack_external_network_id}}"
+      - "{{inputs.parameters.openstack_failure_domain}}"
+      - "{{inputs.parameters.openstack_ssh_key_name}}"
+      - "{{inputs.parameters.cluster_cni}}"
+      - "{{inputs.parameters.openstack_worker_image_name}}"
+      - "{{inputs.parameters.openstack_control_plane_image_name}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      ## Note that during upgrades, OSM's bootstrap is avoided:
+      - "true"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - '{{inputs.parameters.capo_resources_namespace}}'
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Create a PaaS Openshift cluster using ACM
+  - name: create-openshift-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: cluster_name
+      - name: vm_size
+      - name: node_count
+      - name: k8s_version
+      - name: providerconfig_name
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## Openshift specific parameters
+      - name: openshift_release
+      - name: infra_public_ssh_key
+      - name: control_plane_availability
+      - name: worker_cpu
+      - name: worker_memory
+      - name: worker_volume_size
+      - name: worker_storage_class
+      - name: base_domain
+      - name: mgmt_cluster_name
+      - name: hosted_clusters_project
+      - name: etcd_volume_size
+      ## Do we want to skip OSM's bootstrap?
+      - name: skip_bootstrap
+        value: "false"
+      # Other parameters - Recommended to keep defaults
+      - name: base_templates_path
+        value: "cloud-resources/capi"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_openshift_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.k8s_version}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.openshift_release}}"
+      - "{{inputs.parameters.infra_public_ssh_key}}"
+      - "{{inputs.parameters.control_plane_availability}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.worker_cpu}}"
+      - "{{inputs.parameters.worker_memory}}"
+      - "{{inputs.parameters.worker_volume_size}}"
+      - "{{inputs.parameters.worker_storage_class}}"
+      - "{{inputs.parameters.base_domain}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.hosted_clusters_project}}"
+      - "{{inputs.parameters.etcd_volume_size}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      - "{{inputs.parameters.skip_bootstrap}}"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - ''
+      - ''
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Update a PaaS cluster created using CAPI (Openstack)
+  - name: update-openshift-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: cluster_name
+      - name: vm_size
+      - name: node_count
+      - name: k8s_version
+      - name: providerconfig_name
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: mgmt_project_name
+        value: "osm_admin"
+      ## Openshift specific parameters
+      - name: openshift_release
+      - name: infra_public_ssh_key
+      - name: control_plane_availability
+      - name: worker_cpu
+      - name: worker_memory
+      - name: worker_volume_size
+      - name: worker_storage_class
+      - name: base_domain
+      - name: mgmt_cluster_name
+      - name: hosted_clusters_project
+      - name: etcd_volume_size
+      # Other parameters - Recommended to keep defaults
+      - name: base_templates_path
+        value: "cloud-resources/capi"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - update_openshift_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.k8s_version}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.openshift_release}}"
+      - "{{inputs.parameters.infra_public_ssh_key}}"
+      - "{{inputs.parameters.control_plane_availability}}"
+      - "{{inputs.parameters.node_count}}"
+      - "{{inputs.parameters.worker_cpu}}"
+      - "{{inputs.parameters.worker_memory}}"
+      - "{{inputs.parameters.worker_volume_size}}"
+      - "{{inputs.parameters.worker_storage_class}}"
+      - "{{inputs.parameters.base_domain}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - "{{inputs.parameters.hosted_clusters_project}}"
+      - "{{inputs.parameters.etcd_volume_size}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      ## Note that during upgrades, OSM's bootstrap is avoided:
+      - "true"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.base_templates_path}}"
+      - ''
+      - ''
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Bootstrap remote cluster running in **ANY cloud**
+  - name: bootstrap-remote-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+
+      # Specific parameters
+      - name: cluster_name
+      - name: cluster_kustomization_name
+      - name: public_key_mgmt
+      - name: public_key_new_cluster
+      - name: secret_name_private_age_key_for_new_cluster
+      - name: key_name_in_secret
+        value: "agekey"
+      - name: fleet_repo_url
+      - name: sw_catalogs_repo_url
+      - name: templates_dir
+        value: "/sw-catalogs/sw-catalogs-osm/cloud-resources/flux-remote-bootstrap/cluster-base/templates"
+
+      # Other parameters - Recommended to keep defaults
+      - name: mgmt_project_name
+        value: "osm_admin"
+      - name: imported_cluster
+        value: "false"
+      - name: fleet_repo_dir
+        value: "/fleet/fleet-osm/"
+      - name: sw_catalogs_repo_dir
+        value: "/sw-catalogs/sw-catalogs-osm/"
+
+      # Debug/dry run?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: PRIVATE_KEY_NEW_CLUSTER
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.secret_name_private_age_key_for_new_cluster}}"
+            key: "{{inputs.parameters.key_name_in_secret}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_bootstrap_for_remote_cluster
+      - "{{inputs.parameters.cluster_name}}"
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.fleet_repo_dir}}"
+      - "{{inputs.parameters.sw_catalogs_repo_dir}}"
+      - "{{inputs.parameters.fleet_repo_url}}"
+      - "{{inputs.parameters.sw_catalogs_repo_url}}"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      - "{{inputs.parameters.public_key_mgmt}}"
+      - "{{inputs.parameters.public_key_new_cluster}}"
+      - ''
+      - "{{inputs.parameters.imported_cluster}}"
+      - ''
+      - ''
+      - ''
+      - "{{inputs.parameters.templates_dir}}"
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Disconnect Flux in remote cluster running in **ANY cloud**
+  - name: disconnect-flux-remote-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: mgmt_project_name
+        value: "osm_admin"
+
+      # Other parameters - Recommended to keep defaults
+      - name: fleet_repo_dir
+        value: "/fleet/fleet-osm/"
+
+      # Debug/dry run?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - disconnect_flux_remote_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.fleet_repo_dir}}"
+      - "{{inputs.parameters.mgmt_project_name}}"
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Delete cluster from **ANY** cloud
+  - name: delete-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: project_name
+        value: "osm_admin"
+
+      # Other parameters - Recommended to keep defaults
+      - name: fleet_repo_dir
+        value: "/fleet/fleet-osm/"
+      - name: mgmt_resources_dir
+        value: "{{inputs.parameters.fleet_repo_dir}}/{{inputs.parameters.project_name}}/managed-resources/_management"
+      - name: mgmt_cluster_name
+        value: "{{inputs.parameters.mgmt_cluster_name}}"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - delete_remote_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.fleet_repo_dir}}"
+      - "{{inputs.parameters.mgmt_resources_dir}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      runAsUser: 10000
+    #   runAsGroup: 10000
+    #   fsGroup: 10000
+
+
+  # Purge and delete cluster from **ANY** cloud
+  - name: purge-delete-cluster
+    inputs:
+      parameters:
+      # Volumes with cloned repos
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+
+      # Specific parameters
+      - name: cluster_kustomization_name
+      - name: project_name
+        value: "osm_admin"
+      - name: mgmt_cluster_name
+        value: "{{inputs.parameters.mgmt_cluster_name}}"
+
+      # Is a purge needed before deleting?
+      - name: purge
+        value: "true"
+      ## Secret where the kubeconfig is stored (may not exist)
+      - name: temp_kubeconfig_secret_name
+        valueFrom:
+          expression: "kubeconfig-{{inputs.parameters.cluster_kustomization_name}}"
+
+      # Other parameters - Recommended to keep defaults
+      - name: temp_kubeconfig_secret_key
+        value: "kubeconfig"
+      - name: fleet_repo_dir
+        value: "/fleet/fleet-osm/"
+      - name: mgmt_resources_dir
+        value: "{{inputs.parameters.fleet_repo_dir}}/{{inputs.parameters.project_name}}/managed-resources/_management"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - delete_remote_cluster
+      - "{{inputs.parameters.cluster_kustomization_name}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.fleet_repo_dir}}"
+      - "{{inputs.parameters.mgmt_resources_dir}}"
+      - "{{inputs.parameters.mgmt_cluster_name}}"
+      - ''
+      - ''
+      - ''
+      - ''
+      - ''
+      - "{{inputs.parameters.purge}}"
+
+      volumeMounts:
+      - name: fleet-repo-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: kubeconfig-volume
+        mountPath: '/app/.kube'
+    volumes:
+      - name: fleet-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: kubeconfig-volume
+        secret:
+          secretName: '{{inputs.parameters.temp_kubeconfig_secret_name}}'
+          optional: true
+          items:
+            - key: '{{inputs.parameters.temp_kubeconfig_secret_key}}'
+              path: 'config'
+    securityContext:
+      fsGroup: 10000
+      # runAsUser: 10000
+      # runAsGroup: 10000

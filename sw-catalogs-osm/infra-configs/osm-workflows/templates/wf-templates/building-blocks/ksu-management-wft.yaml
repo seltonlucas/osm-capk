@@ -1,0 +1,1194 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: ksu-management-wft
+  namespace: osm-workflows
+spec:
+  templates:
+
+# Create a KSU based on an OKA Package which includes a `HelmRelease`
+  - name: create-ksu-oka-hr
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters - Base KSU generation from template
+      - name: templates_path
+      ## Should substitute environment variables in the template?
+      - name: substitute_environment
+        value: "false"
+      ## Filter for substitution of environment variables
+      - name: substitution_filter
+        value: ""
+      ## Custom environment variables (formatted as .env), to be used for template parametrization
+      - name: custom_env_vars
+        value: ""
+      ## Root folder of the cloned SW Catalogs repo - Do not touch
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Specific parameters - Patch HelmRelease in KSU with inline values
+      - name: kustomization_name
+      - name: helmrelease_name
+      - name: inline_values
+        value: ""
+      # Specific parameters - Secret generation
+      - name: is_preexisting_secret
+        value: "false"
+      - name: target_ns
+      - name: age_public_key
+      - name: values_secret_name
+      - name: reference_secret_for_values
+      - name: reference_key_for_values
+      - name: secret_key
+        value: "values.yaml"
+      # Specific parameters - Configmap generation
+      - name: is_preexisting_cm
+        value: "false"
+      - name: values_cm_name
+      - name: cm_key
+        value: "values.yaml"
+      - name: cm_values
+        value: ""
+      # Specific parameters - KSU rendering
+      - name: ksu_name
+      - name: profile_name
+      - name: profile_type
+      - name: project_name
+        value: "osm_admin"
+      - name: sync
+        value: "true"
+      ## Root folder of the cloned Fleet repo - Do not touch
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: SECRET_VALUES
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.reference_secret_for_values}}"
+            key: "{{inputs.parameters.reference_key_for_values}}"
+            optional: true
+          default: ""
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+        - create_hr_ksu_into_profile
+        - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}/{{inputs.parameters.templates_path}}"
+        - "{{inputs.parameters.substitute_environment}}"
+        - "{{inputs.parameters.substitution_filter}}"
+        - "{{inputs.parameters.custom_env_vars}}"
+        - "{{inputs.parameters.kustomization_name}}"
+        - "{{inputs.parameters.helmrelease_name}}"
+        - "{{inputs.parameters.inline_values}}"
+        - "{{inputs.parameters.is_preexisting_secret}}"
+        - "{{inputs.parameters.target_ns}}"
+        - "{{inputs.parameters.values_secret_name}}"
+        - "{{inputs.parameters.secret_key}}"
+        - "{{inputs.parameters.age_public_key}}"
+        - ''
+        - "{{inputs.parameters.is_preexisting_cm}}"
+        - "{{inputs.parameters.values_cm_name}}"
+        - "{{inputs.parameters.cm_key}}"
+        - "{{inputs.parameters.cm_values}}"
+        - "{{inputs.parameters.ksu_name}}"
+        - "{{inputs.parameters.profile_name}}"
+        - "{{inputs.parameters.profile_type}}"
+        - "{{inputs.parameters.project_name}}"
+        - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+        - "{{inputs.parameters.sync}}"
+      volumeMounts:
+      - name: fleet-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+# Update a KSU based on an OKA Package which includes a `HelmRelease`
+  - name: update-ksu-oka-hr
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters - Base KSU generation from template
+      - name: templates_path
+      ## Should substitute environment variables in the template?
+      - name: substitute_environment
+        value: "false"
+      ## Filter for substitution of environment variables
+      - name: substitution_filter
+        value: ""
+      ## Custom environment variables (formatted as .env), to be used for template parametrization
+      - name: custom_env_vars
+        value: ""
+      ## Root folder of the cloned SW Catalogs repo - Do not touch
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Specific parameters - Patch HelmRelease in KSU with inline values
+      - name: kustomization_name
+      - name: helmrelease_name
+      - name: inline_values
+        value: ""
+      # Specific parameters - Secret generation
+      - name: is_preexisting_secret
+        value: "false"
+      - name: target_ns
+      - name: age_public_key
+      - name: values_secret_name
+      - name: reference_secret_for_values
+      - name: reference_key_for_values
+      - name: secret_key
+        value: "values.yaml"
+      # Specific parameters - Configmap generation
+      - name: is_preexisting_cm
+        value: "false"
+      - name: values_cm_name
+      - name: cm_key
+        value: "values.yaml"
+      - name: cm_values
+        value: ""
+      # Specific parameters - KSU rendering
+      - name: ksu_name
+      - name: profile_name
+      - name: profile_type
+      - name: project_name
+        value: "osm_admin"
+      ## Root folder of the cloned Fleet repo - Do not touch
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: SECRET_VALUES
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.reference_secret_for_values}}"
+            key: "{{inputs.parameters.reference_key_for_values}}"
+            optional: true
+          default: ""
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+        - update_hr_ksu_into_profile
+        - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}/{{inputs.parameters.templates_path}}"
+        - "{{inputs.parameters.substitute_environment}}"
+        - "{{inputs.parameters.substitution_filter}}"
+        - "{{inputs.parameters.custom_env_vars}}"
+        - "{{inputs.parameters.kustomization_name}}"
+        - "{{inputs.parameters.helmrelease_name}}"
+        - "{{inputs.parameters.inline_values}}"
+        - "{{inputs.parameters.is_preexisting_secret}}"
+        - "{{inputs.parameters.target_ns}}"
+        - "{{inputs.parameters.values_secret_name}}"
+        - "{{inputs.parameters.secret_key}}"
+        - "{{inputs.parameters.age_public_key}}"
+        - ''
+        - "{{inputs.parameters.is_preexisting_cm}}"
+        - "{{inputs.parameters.values_cm_name}}"
+        - "{{inputs.parameters.cm_key}}"
+        - "{{inputs.parameters.cm_values}}"
+        - "{{inputs.parameters.ksu_name}}"
+        - "{{inputs.parameters.profile_name}}"
+        - "{{inputs.parameters.profile_type}}"
+        - "{{inputs.parameters.project_name}}"
+        - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      volumeMounts:
+      - name: fleet-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+# Create a "generated" KSU from `HelmRelease` and Source Repo definitions
+  - name: create-ksu-generated-hr
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      # HelmRelease generation
+      - name: helmrelease_name
+      - name: chart_name
+      - name: chart_version
+      - name: target_ns
+      - name: create_ns
+      # Repo source generation
+      - name: is_preexisting_repo
+        value: "false"
+      - name: helmrepo_name
+      - name: helmrepo_url
+      - name: helmrepo_ns
+        valueFrom:
+          expression: "{{input.parameters.target_ns}}"
+      - name: helmrepo_secret_ref
+      # HelmRelease inline values (if any)
+      - name: inline_values
+        value: ""
+      # Secret reference and generation (if required)
+      - name: is_preexisting_secret
+        value: "false"
+      - name: values_secret_name
+      - name: secret_key
+        value: "values.yaml"
+      - name: age_public_key
+      ## Secret values will be obtained from the
+      ## secret named after the input parameter `reference_secret_for_values`,
+      ## and from the key named after the input parameter `reference_key_for_values`
+      - name: reference_secret_for_values
+      - name: reference_key_for_values
+      # ConfigMap reference and generation (if required)
+      - name: is_preexisting_cm
+        value: "false"
+      - name: values_cm_name
+      - name: cm_key
+        value: "values.yaml"
+      - name: cm_values
+        value: ""
+      # KSU rendering
+      - name: ksu_name
+      - name: profile_name
+      - name: profile_type
+      - name: project_name
+        value: "osm_admin"
+      # By default, it will not syncronize, so that we can easily accumulate more than
+      # one Helm chart into the same KSU if desired
+      - name: sync
+        value: "false"
+      ## Root folder of the cloned Fleet repo - Do not touch
+      ### `FLEET_REPO_DIR` is the result of:
+      ### "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: SECRET_VALUES
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.reference_secret_for_values}}"
+            key: "{{inputs.parameters.reference_key_for_values}}"
+            optional: true
+          default: ""
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - create_generated_ksu_from_helm_into_profile
+      - "{{inputs.parameters.helmrelease_name}}"
+      - "{{inputs.parameters.chart_name}}"
+      - "{{inputs.parameters.chart_version}}"
+      - "{{inputs.parameters.target_ns}}"
+      - "{{inputs.parameters.create_ns}}"
+      - "{{inputs.parameters.is_preexisting_repo}}"
+      - "{{inputs.parameters.helmrepo_name}}"
+      - "{{inputs.parameters.helmrepo_url}}"
+      - "{{inputs.parameters.helmrepo_ns}}"
+      - "{{inputs.parameters.helmrepo_secret_ref}}"
+      - "{{inputs.parameters.inline_values}}"
+      - "{{inputs.parameters.is_preexisting_secret}}"
+      - "{{inputs.parameters.values_secret_name}}"
+      - "{{inputs.parameters.secret_key}}"
+      - "{{inputs.parameters.age_public_key}}"
+      - ''
+      - "{{inputs.parameters.is_preexisting_cm}}"
+      - "{{inputs.parameters.values_cm_name}}"
+      - "{{inputs.parameters.cm_key}}"
+      - "{{inputs.parameters.cm_values}}"
+      - "{{inputs.parameters.ksu_name}}"
+      - "{{inputs.parameters.profile_name}}"
+      - "{{inputs.parameters.profile_type}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - "{{inputs.parameters.sync}}"
+      volumeMounts:
+      - name: fleet-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: fleet-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+# Update a "generated" KSU from `HelmRelease` and Source Repo definitions
+  - name: update-ksu-generated-hr
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      # HelmRelease generation
+      - name: helmrelease_name
+      - name: chart_name
+      - name: chart_version
+      - name: target_ns
+      - name: create_ns
+      # Repo source generation
+      - name: is_preexisting_repo
+        value: "false"
+      - name: helmrepo_name
+      - name: helmrepo_url
+      - name: helmrepo_ns
+        valueFrom:
+          expression: "{{input.parameters.target_ns}}"
+      - name: helmrepo_secret_ref
+      # HelmRelease inline values (if any)
+      - name: inline_values
+        value: ""
+      # Secret reference and generation (if required)
+      - name: is_preexisting_secret
+        value: "false"
+      - name: values_secret_name
+      - name: secret_key
+        value: "values.yaml"
+      - name: age_public_key
+      ## Secret values will be obtained from the
+      ## secret named after the input parameter `reference_secret_for_values`,
+      ## and from the key named after the input parameter `reference_key_for_values`
+      - name: reference_secret_for_values
+      - name: reference_key_for_values
+      # ConfigMap reference and generation (if required)
+      - name: is_preexisting_cm
+        value: "false"
+      - name: values_cm_name
+      - name: cm_key
+        value: "values.yaml"
+      - name: cm_values
+        value: ""
+      # KSU rendering
+      - name: ksu_name
+      - name: profile_name
+      - name: profile_type
+      - name: project_name
+        value: "osm_admin"
+      ## Root folder of the cloned Fleet repo - Do not touch
+      ### `FLEET_REPO_DIR` is the result of:
+      ### "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: SECRET_VALUES
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.reference_secret_for_values}}"
+            key: "{{inputs.parameters.reference_key_for_values}}"
+            optional: true
+          default: ""
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - update_generated_ksu_from_helm_into_profile
+      - "{{inputs.parameters.helmrelease_name}}"
+      - "{{inputs.parameters.chart_name}}"
+      - "{{inputs.parameters.chart_version}}"
+      - "{{inputs.parameters.target_ns}}"
+      - "{{inputs.parameters.create_ns}}"
+      - "{{inputs.parameters.is_preexisting_repo}}"
+      - "{{inputs.parameters.helmrepo_name}}"
+      - "{{inputs.parameters.helmrepo_url}}"
+      - "{{inputs.parameters.helmrepo_ns}}"
+      - "{{inputs.parameters.helmrepo_secret_ref}}"
+      - "{{inputs.parameters.inline_values}}"
+      - "{{inputs.parameters.is_preexisting_secret}}"
+      - "{{inputs.parameters.values_secret_name}}"
+      - "{{inputs.parameters.secret_key}}"
+      - "{{inputs.parameters.age_public_key}}"
+      - ''
+      - "{{inputs.parameters.is_preexisting_cm}}"
+      - "{{inputs.parameters.values_cm_name}}"
+      - "{{inputs.parameters.cm_key}}"
+      - "{{inputs.parameters.cm_values}}"
+      - "{{inputs.parameters.ksu_name}}"
+      - "{{inputs.parameters.profile_name}}"
+      - "{{inputs.parameters.profile_type}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      volumeMounts:
+      - name: fleet-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: fleet-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+# Delete a KSU from a profile
+  - name: delete-ksu
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: sw_catalogs_volume_name
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      # Specific parameters - KSU id
+      - name: ksu_name
+      - name: profile_name
+      - name: profile_type
+      - name: project_name
+        value: "osm_admin"
+      # Other parameters - Do not touch
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+        - delete_ksu_from_profile
+        - "{{inputs.parameters.ksu_name}}"
+        - "{{inputs.parameters.profile_name}}"
+        - "{{inputs.parameters.profile_type}}"
+        - "{{inputs.parameters.project_name}}"
+        - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      volumeMounts:
+      - name: fleet-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: fleet-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+# Clone a KSU from a profile to another
+  - name: clone-ksu
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: fleet_volume_name
+      - name: fleet_mount_path
+        value: "/fleet"
+      # Specific parameters - Source and destination KSU
+      ## Source KSU:
+      - name: source_ksu_name
+      - name: source_profile_name
+      - name: source_profile_type
+      - name: source_project_name
+        value: "osm_admin"
+      ## Destination KSU:
+      ## - If any of the destination parameters are not specified, it will assume
+      ##   they are the same as in source.
+      ## - It will reject if all are empty or equal to source, to avoid cloning a KSU over itself
+      - name: destination_ksu_name
+        value: ""
+      - name: destination_profile_name
+        value: ""
+      - name: destination_profile_type
+        value: ""
+      - name: destination_project_name
+        value: ""
+      # Other parameters - Do not touch
+      - name: cloned_fleet_folder_name
+        value: "fleet-osm"
+      # Debug?
+      - name: debug
+        value: "false"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - clone_ksu
+      - "{{inputs.parameters.source_ksu_name}}"
+      - "{{inputs.parameters.source_profile_name}}"
+      - "{{inputs.parameters.source_profile_type}}"
+      - "{{inputs.parameters.source_project_name}}"
+      - "{{inputs.parameters.destination_ksu_name}}"
+      - "{{inputs.parameters.destination_profile_name}}"
+      - "{{inputs.parameters.destination_profile_type}}"
+      - "{{inputs.parameters.destination_project_name}}"
+      - "{{inputs.parameters.fleet_mount_path}}/{{inputs.parameters.cloned_fleet_folder_name}}"
+      volumeMounts:
+      - name: fleet-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: fleet-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+  # Read template folder from OKA Package and convert to `ResourceList`
+  # It can work as KRM generator function, since it accepts an optional input `ResourceList`
+  - name: folder2list
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: sw_catalogs_volume_name
+      - name: temp_volume_name
+      # Filename for input stream
+      - name: input_stream_file
+        value: "/dev/null"
+      # Specific parameters
+      ## Relative path from `sw_catalogs_mount_path`
+      - name: templates_path
+      ## Should substitute environment variables in the template?
+      - name: substitute_environment
+        value: "false"
+      ## Filter for substitution of environment variables
+      - name: substitution_filter
+        value: ""
+      ## Custom environment variables (formatted as .env), to be used for template parametrization
+      - name: custom_env_vars
+        value: ""
+        # value: |
+        #     KEY1=value1
+        #     KEY2=value2
+      # Debug mode?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: sw_catalogs_mount_path
+        value: "/sw-catalogs"
+      - name: cloned_sw_catalogs_folder_name
+        value: "sw-catalogs-osm"
+      - name: rand_str
+        value: "{{=sprig.randAlphaNum(9)}}"
+    outputs:
+      parameters:
+        - name: output_file
+          value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: INFILE
+        value: "{{inputs.parameters.input_stream_file}}"
+      - name: OUTFILE
+        value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+      - name: CUSTOM_ENV
+        value: "{{inputs.parameters.custom_env_vars}}"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - folder2list_generator
+      - "{{inputs.parameters.sw_catalogs_mount_path}}/{{inputs.parameters.cloned_sw_catalogs_folder_name}}/{{inputs.parameters.templates_path}}"
+      - "{{inputs.parameters.substitute_environment}}"
+      - "{{inputs.parameters.substitution_filter}}"
+      volumeMounts:
+      - name: temp-volume
+        mountPath: "/results"
+      - name: sw-catalogs-repo-volume
+        mountPath: '{{inputs.parameters.sw_catalogs_mount_path}}'
+    volumes:
+      - name: temp-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.temp_volume_name}}'
+      - name: sw-catalogs-repo-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.sw_catalogs_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+  # Transform `ResourceList`'s main Kustomization to patch `HelmRelease` to use
+  # inline values
+  - name: transform-ks-add-values-to-hr
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: temp_volume_name
+      # Specific parameters - Generator
+      ## Filename for input stream
+      - name: input_stream_file
+      # Specific parameters
+      ## Patched objects
+      - name: kustomization_name
+      - name: helmrelease_name
+      ## Input values for the Helm Chart
+      - name: inline_values
+      # Debug mode?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: rand_str
+        value: "{{=sprig.randAlphaNum(9)}}"
+    outputs:
+      parameters:
+        - name: output_file
+          value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: INFILE
+        value: "{{inputs.parameters.input_stream_file}}"
+      - name: OUTFILE
+        value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - add_values_to_helmrelease_via_ks
+      - "{{inputs.parameters.kustomization_name}}"
+      - "{{inputs.parameters.helmrelease_name}}"
+      - "{{inputs.parameters.inline_values}}"
+      volumeMounts:
+      - name: temp-volume
+        mountPath: "/results"
+    volumes:
+    - name: temp-volume
+      persistentVolumeClaim:
+        claimName: '{{inputs.parameters.temp_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+      # runAsUser: 10000
+      # runAsGroup: 10000
+
+
+  # Transform `ResourceList`'s main Kustomization to patch `HelmRelease` to use
+  # values from a Secret, a ConfigMap or both.
+  - name: transform-ks-add-referenced-values-to-hr
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: temp_volume_name
+      # Specific parameters - Generator
+      ## Filename for input stream
+      - name: input_stream_file
+      # Specific parameters
+      - name: kustomization_name
+      - name: helmrelease_name
+      ## Source for values (Secret, ConfigMap or both)
+      - name: values_secret_name
+        value: ""
+      - name: values_cm_name
+        value: ""
+      # Debug mode?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: rand_str
+        value: "{{=sprig.randAlphaNum(9)}}"
+    outputs:
+      parameters:
+        - name: output_file
+          value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: INFILE
+        value: "{{inputs.parameters.input_stream_file}}"
+      - name: OUTFILE
+        value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - add_ref_values_to_hr_via_ks
+      - "{{inputs.parameters.kustomization_name}}"
+      - "{{inputs.parameters.helmrelease_name}}"
+      - "{{inputs.parameters.values_secret_name}}"
+      - "{{inputs.parameters.values_cm_name}}"
+      volumeMounts:
+      - name: temp-volume
+        mountPath: "/results"
+    volumes:
+    - name: temp-volume
+      persistentVolumeClaim:
+        claimName: '{{inputs.parameters.temp_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+      # runAsUser: 10000
+      # runAsGroup: 10000
+
+
+  # KRM function to render a ResourceList with a KSU into a target profile
+  - name: render-ksu-into-profile
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: fleet_volume_name
+      - name: temp_volume_name
+      # Filename for input stream
+      - name: input_stream_file
+      # Specific parameters
+      - name: ksu_name
+      - name: profile_name
+      - name: profile_type
+      - name: project_name
+        value: "osm_admin"
+      ## Whether the target KSU folder will be fully re-created on render
+      - name: sync
+        value: "false"
+      # Debug mode?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: fleet_mount_path
+        value: "/fleet"
+      - name: fleet_repo_dir
+        value: "/fleet/fleet-osm/"
+      - name: rand_str
+        value: "{{=sprig.randAlphaNum(9)}}"
+    outputs:
+      parameters:
+        - name: output_file
+          value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: INFILE
+        value: "{{inputs.parameters.input_stream_file}}"
+      - name: OUTFILE
+        value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - render_ksu_into_profile
+      - "{{inputs.parameters.ksu_name}}"
+      - "{{inputs.parameters.profile_name}}"
+      - "{{inputs.parameters.profile_type}}"
+      - "{{inputs.parameters.project_name}}"
+      - "{{inputs.parameters.fleet_repo_dir}}"
+      - "{{inputs.parameters.sync}}"
+      volumeMounts:
+      - name: temp-volume
+        mountPath: "/results"
+      - name: fleet-volume
+        mountPath: '{{inputs.parameters.fleet_mount_path}}'
+    volumes:
+      - name: temp-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.temp_volume_name}}'
+      - name: fleet-volume
+        persistentVolumeClaim:
+          claimName: '{{inputs.parameters.fleet_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    #   runAsUser: 10000
+    #   runAsGroup: 10000
+
+
+  # KRM generator to create Secrets suitable to pass values to `HelmReleases`
+  - name: generator-secret-hr-values
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: temp_volume_name
+      # Specific parameters - Generator
+      ## Filename for input stream
+      - name: input_stream_file
+        value: "/dev/null"
+      ## Name of final manifest filename into generated `ResourceList` object
+      - name: final_manifest_filename
+      # Specific parameters - Secret
+      - name: age_public_key
+      - name: values_secret_name
+      - name: target_ns
+      - name: reference_secret_for_values
+      - name: reference_key_for_values
+      - name: secret_key
+        value: "values.yaml"
+      # Debug mode?
+      - name: debug
+        value: "false"
+    outputs:
+      parameters:
+        - name: output_file
+          valueFrom:
+            parameter: '{{steps.generate-resourcelist.outputs.parameters.output_file}}'
+    steps:
+    - - name: build-manifest
+        templateRef:
+          name: ksu-management-wft
+          template: manifest-secret-hr-values
+        arguments:
+          parameters:
+          # References to required external resources
+          - name: temp_volume_name
+            value: "{{inputs.parameters.temp_volume_name}}"
+          # Specific parameters
+          - name: age_public_key
+            value: "{{inputs.parameters.age_public_key}}"
+          - name: values_secret_name
+            value: "{{inputs.parameters.values_secret_name}}"
+          - name: target_ns
+            value: "{{inputs.parameters.target_ns}}"
+          - name: reference_secret_for_values
+            value: "{{inputs.parameters.reference_secret_for_values}}"
+          - name: reference_key_for_values
+            value: "{{inputs.parameters.reference_key_for_values}}"
+          - name: secret_key
+            value: "{{inputs.parameters.secret_key}}"
+          # Debug?
+          - name: debug
+            value: "{{inputs.parameters.debug}}"
+    - - name: generate-resourcelist
+        templateRef:
+          name: ksu-management-wft
+          template: make-generator
+        arguments:
+          parameters:
+          # References to required external resources
+          - name: temp_volume_name
+            value: "{{inputs.parameters.temp_volume_name}}"
+          # Filename for input stream
+          - name: input_stream_file
+            value: "{{inputs.parameters.input_stream_file}}"
+          # File with raw manifest
+          - name: input_manifest_file
+            value: '{{steps.build-manifest.outputs.parameters.output_file}}'
+          # Name of final manifest filename into generated `ResourceList` object
+          - name: final_manifest_filename
+            value: "{{inputs.parameters.final_manifest_filename}}"
+          # Debug?
+          - name: debug
+            value: "{{inputs.parameters.debug}}"
+
+
+  # KRM generator to create ConfigMaps suitable to pass values to `HelmReleases`
+  - name: generator-cm-hr-values
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: temp_volume_name
+      # Specific parameters - Generator
+      ## Filename for input stream
+      - name: input_stream_file
+        value: "/dev/null"
+      ## Name of final manifest filename into generated `ResourceList` object
+      - name: final_manifest_filename
+      # Specific parameters - ConfigMap
+      - name: values_cm_name
+      - name: target_ns
+      - name: cm_key
+        value: "values.yaml"
+      - name: cm_values
+      # Debug mode?
+      - name: debug
+        value: "false"
+    outputs:
+      parameters:
+        - name: output_file
+          valueFrom:
+            parameter: '{{steps.generate-resourcelist.outputs.parameters.output_file}}'
+    steps:
+    - - name: build-manifest
+        templateRef:
+          name: ksu-management-wft
+          template: manifest-cm-hr-values
+        arguments:
+          parameters:
+          # References to required external resources
+          - name: temp_volume_name
+            value: "{{inputs.parameters.temp_volume_name}}"
+          # Specific parameters
+          - name: values_cm_name
+            value: "{{inputs.parameters.values_cm_name}}"
+          - name: target_ns
+            value: "{{inputs.parameters.target_ns}}"
+          - name: cm_key
+            value: "{{inputs.parameters.cm_key}}"
+          - name: cm_values
+            value: "{{inputs.parameters.cm_values}}"
+          # Debug?
+          - name: debug
+            value: "{{inputs.parameters.debug}}"
+    - - name: generate-resourcelist
+        templateRef:
+          name: ksu-management-wft
+          template: make-generator
+        arguments:
+          parameters:
+          # References to required external resources
+          - name: temp_volume_name
+            value: "{{inputs.parameters.temp_volume_name}}"
+          # Filename for input stream
+          - name: input_stream_file
+            value: "{{inputs.parameters.input_stream_file}}"
+          # File with raw manifest
+          - name: input_manifest_file
+            value: '{{steps.build-manifest.outputs.parameters.output_file}}'
+          # Name of final manifest filename into generated `ResourceList` object
+          - name: final_manifest_filename
+            value: "{{inputs.parameters.final_manifest_filename}}"
+          # Debug?
+          - name: debug
+            value: "{{inputs.parameters.debug}}"
+
+
+  # Converts a manifest to a KRM generator
+  - name: make-generator
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: temp_volume_name
+      # Filename for input stream
+      - name: input_stream_file
+        value: "/dev/null"
+      # File with raw manifest
+      - name: input_manifest_file
+      # Name of final manifest filename into generated `ResourceList` object
+      - name: final_manifest_filename
+      # Debug mode?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: rand_str
+        value: "{{=sprig.randAlphaNum(9)}}"
+    outputs:
+      parameters:
+        - name: output_file
+          value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: INFILE
+        value: "{{inputs.parameters.input_stream_file}}"
+      - name: OUTFILE
+        value: "/results/resourcelist.{{inputs.parameters.rand_str}}.yaml"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+      - make_generator
+      - "{{inputs.parameters.final_manifest_filename}}"
+      - cat
+      - "{{inputs.parameters.input_manifest_file}}"
+      volumeMounts:
+      - name: temp-volume
+        mountPath: "/results"
+    volumes:
+    - name: temp-volume
+      persistentVolumeClaim:
+        claimName: '{{inputs.parameters.temp_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+      # runAsUser: 10000
+      # runAsGroup: 10000
+
+
+  # Produces a secret manifest and encrypts it with SOPS
+  - name: manifest-secret-hr-values
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: temp_volume_name
+      # Public age key to encrypt secret
+      - name: age_public_key
+      # Name of the secret to be created
+      - name: values_secret_name
+      # Namespace for the secret
+      - name: target_ns
+      # Input secret that contains the values to embed into the new secret
+      - name: reference_secret_for_values
+      - name: reference_key_for_values
+        value: "values.yaml"
+      # Key in the new secret where the values will be inserted
+      - name: secret_key
+        value: "values.yaml"
+      # Debug mode?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: rand_str
+        value: "{{=sprig.randAlphaNum(9)}}"
+    outputs:
+      parameters:
+        - name: output_file
+          value: "/results/manifest.{{inputs.parameters.rand_str}}.yaml"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: INSTREAM
+        valueFrom:
+          secretKeyRef:
+            name: "{{inputs.parameters.reference_secret_for_values}}"
+            key: "{{inputs.parameters.reference_key_for_values}}"
+      - name: OUTFILE
+        value: "/results/manifest.{{inputs.parameters.rand_str}}.yaml"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+        - kubectl_encrypt
+        - "{{inputs.parameters.age_public_key}}"
+        - create
+        - secret
+        - generic
+        - "{{inputs.parameters.values_secret_name}}"
+        - --namespace={{inputs.parameters.target_ns}}
+        - --from-file={{inputs.parameters.secret_key}}=/dev/stdin
+        - -o=yaml
+        - --dry-run=client
+      volumeMounts:
+      - name: temp-volume
+        mountPath: "/results"
+    volumes:
+    - name: temp-volume
+      persistentVolumeClaim:
+        claimName: '{{inputs.parameters.temp_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    # runAsUser: 10000
+    # runAsGroup: 10000
+
+
+  # Produces a ConfigMap manifest
+  - name: manifest-cm-hr-values
+    inputs:
+      parameters:
+      # References to required external resources
+      - name: temp_volume_name
+      # Specific parameters
+      - name: values_cm_name
+      - name: target_ns
+      - name: cm_key
+        value: "values.yaml"
+      - name: cm_values
+      # Debug mode?
+      - name: debug
+        value: "false"
+      # Other parameters - Do not touch
+      - name: rand_str
+        value: "{{=sprig.randAlphaNum(9)}}"
+    outputs:
+      parameters:
+        - name: output_file
+          value: "/results/manifest.{{inputs.parameters.rand_str}}.yaml"
+    container:
+      image: opensourcemano/osm-krm-functions:19
+      # imagePullPolicy: Always
+      env:
+      - name: INSTREAM
+        value: "{{inputs.parameters.cm_values}}"
+      - name: OUTFILE
+        value: "/results/manifest.{{inputs.parameters.rand_str}}.yaml"
+      - name: DEBUG
+        value: "{{inputs.parameters.debug}}"
+      command: ["/app/scripts/entrypoint.sh"]
+      args:
+        - kubectl
+        - create
+        - configmap
+        - "{{inputs.parameters.values_cm_name}}"
+        - --namespace={{inputs.parameters.target_ns}}
+        - --from-file={{inputs.parameters.cm_key}}=/dev/stdin
+        - -o=yaml
+        - --dry-run=client
+      volumeMounts:
+      - name: temp-volume
+        mountPath: "/results"
+    volumes:
+    - name: temp-volume
+      persistentVolumeClaim:
+        claimName: '{{inputs.parameters.temp_volume_name}}'
+    securityContext:
+      fsGroup: 10000
+    # runAsUser: 10000
+    # runAsGroup: 10000

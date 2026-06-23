@@ -1,0 +1,102 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: ${cluster_resource_name}-public-subnet-${cluster_location}a
+  labels:
+    type: subnet
+    provider: aws
+    cluster: ${cluster_resource_name}
+    zone: ${cluster_location}a
+    access: public
+spec:
+  forProvider:
+    region: ${cluster_location}
+    availabilityZone: ${cluster_location}a
+    cidrBlock: 10.10.0.0/24
+    vpcIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+    mapPublicIpOnLaunch: true
+    tags:
+      kubernetes.io/role/elb: "1"
+      Name: ${cluster_name}-public-subnet-${cluster_location}a
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: ${cluster_resource_name}-private-subnet-${cluster_location}a
+  labels:
+    type: subnet
+    provider: aws
+    cluster: ${cluster_resource_name}
+    zone: ${cluster_location}a
+    access: private
+spec:
+  forProvider:
+    region: ${cluster_location}
+    availabilityZone: ${cluster_location}a
+    cidrBlock: 10.10.1.0/24
+    vpcIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+    mapPublicIpOnLaunch: false
+    tags:
+      kubernetes.io/role/elb: "1"
+      Name: ${cluster_name}-private-subnet-${cluster_location}a
+      kubernetes.io/cluster/test: shared
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: ${cluster_resource_name}-private-subnet-${cluster_location}b
+  labels:
+    type: subnet
+    provider: aws
+    cluster: ${cluster_resource_name}
+    zone: ${cluster_location}b
+    access: private
+spec:
+  forProvider:
+    region: ${cluster_location}
+    availabilityZone: ${cluster_location}b
+    cidrBlock: 10.10.2.0/24
+    vpcIdSelector:
+      matchLabels:
+        provider: aws
+        cluster: ${cluster_resource_name}
+    mapPublicIpOnLaunch: false
+    tags:
+      kubernetes.io/role/elb: "1"
+      Name: ${cluster_name}-private-subnet-${cluster_location}b
+      kubernetes.io/cluster/test: shared
+  # Use in case you wanted to use different credentials (i.e., ProviderConfig different than default)
+  providerConfigRef:
+    name: ${providerconfig_name}

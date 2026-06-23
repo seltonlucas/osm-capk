@@ -1,0 +1,82 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+---
+# TEMPLATE_PARAMETERS:
+# ===================
+#
+# CLUSTER_KUSTOMIZATION_NAME: Name of the Kustomization in the management cluster representing the KubeVirt cluster.
+# - Alternatively, it can be patched at:
+#   .metadata.name
+#   .metadata.labels.cluster
+#   .spec.commonMetadata.labels.cluster
+#
+# PARAMETERS TO PATCH:
+# ===================
+#
+# .spec.postBuild.substitute.cluster_name: Name of the cluster.
+# .spec.postBuild.substitute.namespace: Namespace where CAPI resources are deployed (default: "default").
+# .spec.postBuild.substitute.kubernetes_version: Kubernetes version (e.g. "v1.30.1").
+# .spec.postBuild.substitute.control_plane_machine_count: Number of control plane nodes.
+# .spec.postBuild.substitute.worker_machine_count: Number of worker nodes.
+# .spec.postBuild.substitute.control_plane_cpu_cores: vCPU cores for control plane VMs (default: "2").
+# .spec.postBuild.substitute.control_plane_memory: Memory for control plane VMs (default: "4Gi").
+# .spec.postBuild.substitute.control_plane_ephemeral_storage: Ephemeral storage for control plane virt-launcher pods (default: "2Gi").
+# .spec.postBuild.substitute.worker_cpu_cores: vCPU cores for worker VMs (default: "2").
+# .spec.postBuild.substitute.worker_memory: Memory for worker VMs (default: "4Gi").
+# .spec.postBuild.substitute.worker_ephemeral_storage: Ephemeral storage for worker virt-launcher pods (default: "2Gi").
+# .spec.postBuild.substitute.vm_image: KubeVirt container disk image (e.g. "quay.io/capk/ubuntu-2204-container-disk:v1.30.1").
+# .spec.postBuild.substitute.pod_cidr: Pod network CIDR (default: "10.243.0.0/16").
+# .spec.postBuild.substitute.service_cidr: Service network CIDR (default: "10.95.0.0/16").
+
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${CLUSTER_KUSTOMIZATION_NAME}
+  namespace: managed-resources
+  labels:
+    cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+spec:
+  commonMetadata:
+    labels:
+      cluster: ${CLUSTER_KUSTOMIZATION_NAME}
+  interval: 1h
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: sw-catalogs
+    namespace: flux-system
+  path: ./cloud-resources/capi/kubevirt-kubeadm/manifests/base
+  prune: true
+  wait: true
+  postBuild:
+    substitute:
+      cluster_name: "mykubevirtcluster01"
+      namespace: "default"
+      kubernetes_version: "v1.30.1"
+      control_plane_machine_count: "1"
+      worker_machine_count: "1"
+      control_plane_cpu_cores: "2"
+      control_plane_memory: "4Gi"
+      control_plane_ephemeral_storage: "2Gi"
+      worker_cpu_cores: "2"
+      worker_memory: "4Gi"
+      worker_ephemeral_storage: "2Gi"
+      vm_image: "quay.io/capk/ubuntu-2204-container-disk:v1.30.1"
+      pod_cidr: "10.243.0.0/16"
+      service_cidr: "10.95.0.0/16"

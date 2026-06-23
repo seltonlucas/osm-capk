@@ -1,0 +1,675 @@
+#!/bin/bash
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
+#
+
+
+# Convert input string to a safe name for K8s resources
+function safe_name() {
+  local INPUT="$1"
+
+  echo "${INPUT,,}" | \
+    sed '/\.\// s|./||' | \
+    sed 's|\.|-|g' | \
+    sed 's|/|-|g' | \
+    sed 's|_|-|g' | \
+    sed 's| |-|g'
+}
+
+
+# Helper function to create a new age key pair
+function create_age_keypair() {
+  local AGE_KEY_NAME="$1"
+  local CREDENTIALS_DIR="${2:-"${CREDENTIALS_DIR}"}"
+
+  # Delete the keys in case they existed already
+  rm -f "${CREDENTIALS_DIR}/${AGE_KEY_NAME}.key" "${CREDENTIALS_DIR}/${AGE_KEY_NAME}.pub"
+
+  # Private key
+  age-keygen -o "${CREDENTIALS_DIR}/${AGE_KEY_NAME}.key"
+
+  # Public key (extracted from comment at private key)
+  age-keygen -y "${CREDENTIALS_DIR}/${AGE_KEY_NAME}.key" > "${CREDENTIALS_DIR}/${AGE_KEY_NAME}.pub"
+}
+
+
+# Helper function to in-place encrypt secrets in manifest
+function encrypt_secret_inplace() {
+  local FILE="$1"
+  local PUBLIC_KEY="$2"
+
+  sops \
+    --age=${PUBLIC_KEY} \
+    --encrypt \
+    --encrypted-regex '^(data|stringData)$' \
+    --in-place "${FILE}"
+}
+
+
+# Helper function to encrypt secrets from stdin
+function encrypt_secret_from_stdin() {
+  local PUBLIC_KEY="$1"
+
+  # Save secret manifest to temporary file
+  local TMPFILE=$(mktemp /tmp/secret.XXXXXXXXXX) || exit 1
+  cat > "${TMPFILE}"
+  # NOTE: Required workaround for busybox's version of `mktemp`, which is quite limited and does not support temporary files with extensions.
+  #       `.yaml` is required for proper `sops` behaviour.
+  mv "${TMPFILE}" "${TMPFILE}.yaml"
+
+  # Encrypt
+  sops \
+    --age=${PUBLIC_KEY} \
+    --encrypt \
+    --encrypted-regex '^(data|stringData)$' \
+    --in-place "${TMPFILE}.yaml"
+
+  # Outputs the result and removes the temporary file
+  cat "${TMPFILE}.yaml" && rm -f "${TMPFILE}.yaml"
+}
+
+
+# Helper function to create secret manifest and encrypt with public key
+function kubectl_encrypt() {
+  local PUBLIC_KEY="$1"
+
+  # Gathers all optional parameters for transformer funcion (if any) and puts them into an array for further use
+  local ALL_PARAMS=( "${@}" )
+  local PARAMS=( "${ALL_PARAMS[@]:1}" )
+
+  kubectl \
+    "${PARAMS[@]}" | \
+  encrypt_secret_from_stdin \
+    "${PUBLIC_KEY}"
+}
+
+
+# Generator function to convert source folder to `ResourceList`
+function folder2list_generator() {
+  local FOLDER="${1:-}"
+  local SUBSTENV="${2:-"false"}"
+  local FILTER="${3:-""}"
+
+  if [[ "${SUBSTENV,,}" == "true" ]];
+  then
+    # Mix input with new generated manifests and replace environment variables
+    join_lists \
+      <(cat) \
+      <(
+        kpt fn source "${FOLDER}" | \
+        replace_env_vars "${FILTER}"
+      )
+  else
+    # Mix input with new generated manifests
+    join_lists \
+      <(cat) \
+      <(
+        kpt fn source "${FOLDER}"
+      )
+  fi
+
+}
+
+
+# Function to convert source folder to `ResourceList` (no generator)
+function folder2list() {
+  local FOLDER="${1:-}"
+
+  kpt fn source "${FOLDER}"
+}
+
+
+# Helper function to convert manifest to `ResourceList`
+function manifest2list() {
+  kustomize cfg cat --wrap-kind ResourceList
+}
+
+
+# Helper function to convert `ResourceList` to manifests in folder structure.
+# - New folder must be created to render the manifests.
+function list2folder() {
+  local FOLDER="${1:-}"
+  local DRY_RUN="${2:-${DRY_RUN:-false}}"
+
+  if [[ "${DRY_RUN,,}" == "true" ]];
+  then
+    cat
+  else
+    kpt fn sink "${FOLDER}"
+  fi
+}
+
+
+# Helper function to convert `ResourceList` to manifests in folder structure.
+# - It copies (cp) the generated files/subfolders over the target folder.
+# - Pre-existing files and subfolder structure in target folder is preserved.
+function list2folder_cp_over() {
+  local FOLDER="${1:-}"
+  local DRY_RUN="${2:-${DRY_RUN:-false}}"
+
+  if [[ "${DRY_RUN,,}" == "true" ]];
+  then
+    cat
+  else
+    local TMPFOLDER=$(mktemp -d) || exit 1
+    kpt fn sink "${TMPFOLDER}/manifests"
+
+    # Copy the generated files over the target folder
+    mkdir -p "${FOLDER}/"
+    cp -r "${TMPFOLDER}/manifests/"* "${FOLDER}/"
+
+    # Delete temporary folder
+    rm -rf "${TMPFOLDER}"
+  fi
+}
+
+
+# Helper function to convert `ResourceList` to manifests in folder structure.
+# - It syncs the generated files/subfolders over the target folder.
+# - Pre-existing files and subfolder structure in target folder is deleted if not present in `ResourceList`.
+function list2folder_sync_replace() {
+  local FOLDER="${1:-}"
+  local DRY_RUN="${2:-${DRY_RUN:-false}}"
+
+  if [[ "${DRY_RUN,,}" == "true" ]];
+  then
+    cat
+  else
+    local TMPFOLDER=$(mktemp -d) || exit 1
+    kpt fn sink "${TMPFOLDER}/manifests"
+
+    # Copy the generated files over the target folder
+    mkdir -p "${FOLDER}/"
+    rsync -arh --exclude ".git" --exclude ".*" --delete \
+      "${TMPFOLDER}/manifests/" "${FOLDER}/"
+
+    # Delete temporary folder
+    rm -rf "${TMPFOLDER}"
+  fi
+}
+
+
+# Helper function to render **SAFELY** a single manifest coming from stdin into a profile, with a proper KSU subfolder
+function render_manifest_over_ksu() {
+  local KSU_NAME="$1"
+  local TARGET_PROFILE_FOLDER="$2"
+  local MANIFEST_FILENAME="$3"
+
+  manifest2list | \
+  set_filename_to_items \
+    "${MANIFEST_FILENAME}" | \
+  prepend_folder_path \
+    "${KSU_NAME}/" | \
+  list2folder_cp_over \
+    "${TARGET_PROFILE_FOLDER}"
+}
+
+
+# Set filename to `ResourceList` item
+function set_filename_to_items() {
+  local FILENAME="$1"
+
+  yq "(.items[]).metadata.annotations.\"config.kubernetes.io/path\" |= \"${FILENAME}\"" | \
+  yq "(.items[]).metadata.annotations.\"internal.config.kubernetes.io/path\" |= \"${FILENAME}\""
+}
+
+
+# Prepend folder path to `ResourceList`
+function prepend_folder_path() {
+  local PREFIX="$1"
+
+  if [[ (-z "${PREFIX}") || ("${PREFIX}" == ".") ]];
+  then
+    cat
+  else
+    yq "(.items[]).metadata.annotations.\"config.kubernetes.io/path\" |= \"${PREFIX}\" + ." | \
+    yq "(.items[]).metadata.annotations.\"internal.config.kubernetes.io/path\" |= \"${PREFIX}\" + ."
+  fi
+}
+
+
+# Rename file in `ResourceList`
+function rename_file_in_items() {
+  local SOURCE_NAME="$1"
+  local DEST_NAME="$2"
+
+  yq "(.items[].metadata.annotations | select (.\"config.kubernetes.io/path\" == \"${SOURCE_NAME}\")).\"config.kubernetes.io/path\" = \"${DEST_NAME}\"" | \
+  yq "(.items[].metadata.annotations | select (.\"internal.config.kubernetes.io/path\" == \"${SOURCE_NAME}\")).\"internal.config.kubernetes.io/path\" = \"${DEST_NAME}\""
+}
+
+
+# Get value from key in object in `ResourceList`
+function get_value_from_resourcelist() {
+  local KEY_PATH="$1"
+  local TARGET_FILTERS="${2:-}"
+  # Example: To get a specific kind ("ProviderConfig") with a specific name ("default"). (TIP: Note the escaped double quotes).
+  # TARGET_FILTERS="| select(.kind == \"ProviderConfig\") | select(.metadata.name == \"default\")"
+
+  yq "(.items[]${TARGET_FILTERS})${KEY_PATH}"
+}
+
+
+# Patch "replace" to item in `ResourceList`
+function patch_replace() {
+  local KEY_PATH="$1"
+  local VALUE="$2"
+  local TARGET_FILTERS="${3:-}"
+  # Example: To only patch a specific kind ("ProviderConfig") with a specific name ("default"). (TIP: Note the escaped double quotes).
+  # TARGET_FILTERS="| select(.kind == \"ProviderConfig\") | select(.metadata.name == \"default\")"
+
+  yq "(.items[]${TARGET_FILTERS})${KEY_PATH} = \"${VALUE}\""
+}
+
+
+# Add label to item in `ResourceList`
+function set_label() {
+  local KEY="$1"
+  local VALUE="$2"
+  local TARGET_FILTERS="${3:-}"
+  # Example: To only patch a specific kind ("ProviderConfig") with a specific name ("default"). (TIP: Note the escaped double quotes).
+  # TARGET_FILTERS="| select(.kind == \"ProviderConfig\") | select(.metadata.name == \"default\")"
+
+  yq "(.items[]${TARGET_FILTERS}).metadata.labels.${KEY} = \"${VALUE}\""
+}
+
+
+# Patch which "appends" to list existing in item in `ResourceList`
+function patch_add_to_list() {
+  local KEY_PATH="$1"
+  local VALUE="$2"
+  local TARGET_FILTERS="${3:-}"
+  # Example: To only patch a specific kind ("ProviderConfig") with a specific name ("default"). (TIP: Note the escaped double quotes).
+  # TARGET_FILTERS="| select(.kind == \"ProviderConfig\") | select(.metadata.name == \"default\")"
+
+  local VALUE_AS_JSON="$(echo "${VALUE}" | yq -o json -I0)"
+
+  yq "(.items[]${TARGET_FILTERS})${KEY_PATH} += ${VALUE_AS_JSON}"
+}
+
+
+# Patch which removes from list, existing in item in `ResourceList`
+function patch_delete_from_list() {
+  local KEY_PATH="$1"
+  local TARGET_FILTERS="${2:-}"
+
+  # local VALUE_AS_JSON="$(echo "${VALUE}" | yq -o json -I0)"
+
+  yq "del((.items[]${TARGET_FILTERS})${KEY_PATH})"
+}
+
+
+# Check if an element/value is in a given list, existing in item in `ResourceList`
+function is_element_on_list() {
+  local KEY_PATH="$1"
+  local VALUE="$2"
+  local TARGET_FILTERS="${3:-}"
+  # Example: To only patch a specific kind ("ProviderConfig") with a specific name ("default"). (TIP: Note the escaped double quotes).
+  # TARGET_FILTERS="| select(.kind == \"ProviderConfig\") | select(.metadata.name == \"default\")"
+
+  TEST_RESULT=$(
+    cat | \
+    yq "(.items[]${TARGET_FILTERS})${KEY_PATH} == \"${VALUE}\"" | grep "true"
+  )
+
+  if [[ "${TEST_RESULT}" != "true" ]]
+  then
+    echo "false"
+  else
+    echo "true"
+  fi
+}
+
+
+# Patch "replace" to item in `ResourceList` using a JSON as value
+function patch_replace_inline_json() {
+  local KEY_PATH="$1"
+  local VALUE="$2"
+  local TARGET_FILTERS="${3:-}"
+  # Example: To only patch a specific kind ("ProviderConfig") with a specific name ("default"). (TIP: Note the escaped double quotes).
+  # TARGET_FILTERS="| select(.kind == \"ProviderConfig\") | select(.metadata.name == \"default\")"
+
+  VALUE_AS_JSON="$(echo "${VALUE}" | yq -o=json)" yq "(.items[]${TARGET_FILTERS})${KEY_PATH} = strenv(VALUE_AS_JSON)"
+}
+
+
+# Delete full object from `ResourceList`
+function delete_object() {
+  local OBJECT_NAME="$1"
+  local KIND_NAME="$2"
+  local API_VERSION="${3:-""}"
+
+  # Calculated inputs
+  if [[ -z "${API_VERSION}" ]]
+  then
+    # If `apiVersion` is not specified
+    local TARGET_FILTER="| select(.kind == \"${KIND_NAME}\") | select(.metadata.name == \"${OBJECT_NAME}\")"
+  else
+    # Otherwise, it is taken into account
+    local TARGET_FILTER="| select(.kind == \"${KIND_NAME}\") | select(.apiVersion == \"${API_VERSION}\") | select(.metadata.name == \"${OBJECT_NAME}\")"
+  fi
+
+  # Delete object
+  yq "del((.items[]${TARGET_FILTER}))"
+}
+
+
+# Empty transformer function
+function noop_transformer() {
+  cat
+}
+
+
+# Add patch to `Kustomization` item in `ResourceList`
+function add_patch_to_kustomization() {
+  local KUSTOMIZATION_NAME="$1"
+  local FULL_PATCH_CONTENT="$2"
+
+  patch_add_to_list \
+    ".spec.patches" \
+    "${FULL_PATCH_CONTENT}" \
+    "| select(.kind == \"Kustomization\") | select(.metadata.name == \"${KUSTOMIZATION_NAME}\")"
+}
+
+function patch_add_value_as_list() {
+  local KEY_PATH="$1"
+  local VALUE="$2"
+  local TARGET_FILTERS="${3:-}"
+
+  yq "(.items[]${TARGET_FILTERS})${KEY_PATH} += [${VALUE}]"
+}
+
+function add_patch_to_kustomization_as_list() {
+  local KUSTOMIZATION_NAME="$1"
+  local PATCH_VALUE="$2"
+
+  local VALUE_AS_JSON=$(echo "$PATCH_VALUE" | yq -o json -I0)
+
+  patch_add_value_as_list \
+    ".spec.patches" \
+    "${VALUE_AS_JSON}" \
+    "| select(.kind == \"Kustomization\") | select(.metadata.name == \"${KUSTOMIZATION_NAME}\")"
+}
+
+function add_component_to_kustomization_as_list() {
+  local KUSTOMIZATION_NAME="$1"
+  shift
+  local COMPONENT=("$@")
+
+  local COMPONENT_JSON=$(printf '"%s",' "${COMPONENT[@]}" | sed 's/,$//')
+
+  patch_add_value_as_list \
+    ".spec.components" \
+    "${COMPONENT_JSON}" \
+    "| select(.kind == \"Kustomization\") | select(.metadata.name == \"${KUSTOMIZATION_NAME}\")"
+}
+
+function add_config_to_kustomization() {
+  local KUSTOMIZATION_NAME="$1"
+
+  yq '
+    (.items[] | select(.kind == "Kustomization") | select(.metadata.name == "'"${KUSTOMIZATION_NAME}"'"))
+    .spec.postBuild.substituteFrom = [{"kind": "ConfigMap", "name": "'"${KUSTOMIZATION_NAME}"'-parameters"}]
+  '
+}
+
+# Helper function to produce a JSON Patch as specified in RFC 6902
+function as_json_patch() {
+  local OPERATION="$1"
+  local PATCH_PATH="$2"
+  local VALUES="$3"
+
+  # Convert to JSON dictionary to insert as map instead of string
+  local VALUES_AS_DICT=$(echo "${VALUES}" | yq -o=json)
+
+  # Generate a patch list
+  cat <<EOF | yq ".[0].value = ${VALUES_AS_DICT}"
+- op: ${OPERATION}
+  path: ${PATCH_PATH}
+EOF
+}
+
+
+# Helper function to produce a full patch, with target object + JSON Patch RFC 6902
+function full_json_patch() {
+  local TARGET_KIND="$1"
+  local TARGET_NAME="$2"
+  local OPERATION="$3"
+  local PATCH_PATH="$4"
+  # Gathers all optional parameters for transformer function (if any) and puts them into an array for further use
+  local ALL_PARAMS=( "${@}" )
+  local VALUES=( "${ALL_PARAMS[@]:4}" )
+
+  # Accumulates value items into the patch
+  local PATCH_CONTENT=""
+  for VAL in "${VALUES[@]}"
+  do
+    local VAL_AS_DICT=$(echo "${VAL}" | yq -o=json)
+
+    ITEM=$(
+      yq --null-input ".op = \"${OPERATION}\", .path = \"${PATCH_PATH}\"" | \
+      yq ".value = ${VAL_AS_DICT}" | \
+      yq "[ . ]"
+    )
+
+    PATCH_CONTENT="$(echo -e "${PATCH_CONTENT}\n${ITEM}")"
+  done
+
+  # Wrap a full patch around, adding target specification
+  local PATCH_FULL=$(
+    yq --null-input ".target.kind = \"${TARGET_KIND}\", .target.name = \"${TARGET_NAME}\"" | \
+    yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' - \
+      <(printf "patch: |-\n%s\n" "$(echo "${PATCH_CONTENT}" | sed 's/^/  /')" ) | \
+    yq "[.]"
+  )
+
+  echo "${PATCH_FULL}"
+}
+
+
+# Add values to `HelmRelease` by patch into `Kustomization` item in `ResourceList`
+function add_values_to_helmrelease_via_ks() {
+  local KUSTOMIZATION_NAME="$1"
+  local HELMRELEASE_NAME="$2"
+  local VALUES="$3"
+
+  # Embed into patch list
+  local FULL_PATCH_CONTENT="$(
+    full_json_patch \
+      "HelmRelease" \
+      "${HELMRELEASE_NAME}" \
+      "add" \
+      "/spec/values" \
+      "${VALUES}"
+  )"
+
+  # Path via intermediate Kustomization object
+  add_patch_to_kustomization \
+    "${KUSTOMIZATION_NAME}" \
+    "${FULL_PATCH_CONTENT}"
+}
+
+
+# Add values from Secret/ConfigMap to `HelmRelease` by patch into `Kustomization` item in `ResourceList`
+function add_referenced_values_to_helmrelease_via_ks() {
+  local KUSTOMIZATION_NAME="$1"
+  local HELMRELEASE_NAME="$2"
+  local VALUES_FROM="$3"
+
+  # Embed into patch list
+  local FULL_PATCH_CONTENT="$(
+    full_json_patch \
+      "HelmRelease" \
+      "${HELMRELEASE_NAME}" \
+      "add" \
+      "/spec/valuesFrom" \
+      "${VALUES_FROM}"
+  )"
+
+  # Path via intermediate Kustomization object
+  add_patch_to_kustomization \
+    "${KUSTOMIZATION_NAME}" \
+    "${FULL_PATCH_CONTENT}"
+}
+
+
+# High level function to add values from Secret, ConfigMap or both to `HelmRelease` by patch into `Kustomization` item in `ResourceList`
+function add_ref_values_to_hr_via_ks() {
+  local KUSTOMIZATION_NAME="$1"
+  local HELMRELEASE_NAME="$2"
+  local VALUES_SECRET_NAME="${3:-""}"
+  local VALUES_CM_NAME="${4:-""}"
+
+  local YAML_VALUES_FROM_BOTH=$(cat <<EOF
+- kind: Secret
+  name: "${VALUES_SECRET_NAME}"
+- kind: ConfigMap
+  name: "${VALUES_CM_NAME}"
+EOF
+  )
+  local YAML_VALUES_FROM_SECRET=$(cat <<EOF
+- kind: Secret
+  name: "${VALUES_SECRET_NAME}"
+EOF
+  )
+  local YAML_VALUES_FROM_CM=$(cat <<EOF
+- kind: ConfigMap
+  name: "${VALUES_CM_NAME}"
+EOF
+  )
+
+  # Chooses the appropriate YAML
+  VALUES_FROM=""
+  if [[ ( -n "${VALUES_SECRET_NAME}" ) && ( -n "${VALUES_CM_NAME}" ) ]];
+  then
+    VALUES_FROM="${YAML_VALUES_FROM_BOTH}"
+  elif [[ -n "${VALUES_SECRET_NAME}" ]];
+  then
+    VALUES_FROM="${YAML_VALUES_FROM_SECRET}"
+  elif [[ -n "${VALUES_CM_NAME}" ]];
+  then
+    VALUES_FROM="${YAML_VALUES_FROM_CM}"
+  else
+    # If none is set, it must be an error
+    return 1
+  fi
+
+  # Calls the low-level function
+  add_referenced_values_to_helmrelease_via_ks \
+    "${KUSTOMIZATION_NAME}" \
+    "${HELMRELEASE_NAME}" \
+    "${VALUES_FROM}"
+}
+
+# Substitute environment variables from stdin
+function replace_env_vars() {
+  # Optional parameter to filter environment variables that can be replaced
+  local FILTER=${1:-}
+
+  if [[ -n "${FILTER}" ]];
+  then
+    envsubst "${FILTER}"
+  else
+    envsubst
+  fi
+}
+
+
+# Join two `ResourceList` **files**
+#
+# Examples of use:
+# $ join_lists list_file1.yaml list_file2.yaml
+# $ join_lists <(manifest2list < manifest_file1.yaml) <(manifest2list < manifest_file2.yaml)
+# $ cat prueba1.yaml | manifest2list | join_lists - <(manifest2list < prueba2.yaml)
+#
+# NOTE: Duplicated keys and arrays may be overwritten by the latest file.
+# See: https://stackoverflow.com/questions/66694238/merging-two-yaml-documents-while-concatenating-arrays
+function join_lists() {
+  local FILE1="$1"
+  local FILE2="$2"
+
+  yq eval-all '. as $item ireduce ({}; . *+ $item)' \
+    "${FILE1}" \
+    "${FILE2}"
+}
+
+
+# Helper function to create a generator from a function that creates manifests
+function make_generator() {
+  local MANIFEST_FILENAME="$1"
+  local SOURCER_FUNCTION="$2"
+  # Gathers all optional parameters for the funcion (if any) and puts them into an array for further use
+  local ALL_PARAMS=( "${@}" )
+  local PARAMS=( "${ALL_PARAMS[@]:2}" )
+
+  # Mix input with new generated manifests
+  join_lists \
+    <(cat) \
+    <(
+      "${SOURCER_FUNCTION}" \
+        "${PARAMS[@]}" | \
+      manifest2list | \
+      set_filename_to_items "${MANIFEST_FILENAME}"
+    )
+}
+
+
+function transform_if() {
+  local TEST_RESULT=$1
+
+  # Gathers all optional parameters for transformer funcion (if any) and puts them into an array for further use
+  local ALL_PARAMS=( "${@}" )
+  local PARAMS=( "${ALL_PARAMS[@]:1}" )
+
+  # If test result is true (==0), then runs the transformation normally
+  if [[ "${TEST_RESULT}" == "0" ]];
+  then
+    "${PARAMS[@]}"
+  # Otherwise, just pass through
+  else
+    cat
+  fi
+}
+
+
+# Helper function to convert multiline input from stdin to comma-separed output
+function multiline2commalist() {
+  mapfile -t TMP_ARRAY < <(cat)
+  printf -v TMP_LIST '%s,' "${TMP_ARRAY[@]}"
+  echo "${TMP_LIST}" | sed 's/,$//g'
+}
+
+
+# Helper function to check pending changes in workdir to `fleet` repo
+function check_fleet_workdir_status() {
+  local FLEET_REPO_DIR="${1:-${FLEET_REPO_DIR}}"
+
+  pushd "${FLEET_REPO_DIR}"
+  git status
+  popd
+}
+
+
+# Helper function to commit changes in workdir to `fleet` repo
+function commit_and_push_to_fleet() {
+  local DEFAULT_COMMIT_MESSAGE="Committing latest changes to fleet repo at $(date +'%Y-%m-%d %H:%M:%S')"
+  local COMMIT_MESSAGE="${1:-${DEFAULT_COMMIT_MESSAGE}}"
+  local FLEET_REPO_DIR="${2:-${FLEET_REPO_DIR}}"
+
+  pushd "${FLEET_REPO_DIR}"
+  git status
+  git add -A
+  git commit -m "${COMMIT_MESSAGE}"
+  echo "${COMMIT_MESSAGE}"
+  git push
+  popd
+}

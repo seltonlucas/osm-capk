@@ -1,0 +1,334 @@
+# Copyright 2021 K Sai Kiran (Tata Elxsi)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+__author__ = "K Sai Kiran <saikiran.k@tataelxsi.co.in>, Selvi Jayaraman <selvi.j@tataelxsi.co.in>"
+__date__ = "$12-June-2021 8:30:59$"
+
+from copy import deepcopy
+from osm_nbi.descriptor_topics import NsdTopic
+from .base_methods import BaseMethod
+
+from osm_nbi.instance_topics import NsrTopic, VnfrTopic
+
+
+class VnfInstances2NsInstances:
+    def __init__(self, db, fs, msg, auth):
+        """
+        Constructor of Vnf Instances to Ns Instances
+        """
+        self.new_vnf_instance = NewVnfInstance(db, fs, msg, auth)
+        self.list_vnf_instance = ListVnfInstance(db, fs, msg, auth)
+        self.show_vnf_instance = ShowVnfInstance(db, fs, msg, auth)
+        self.delete_vnf_instance = DeleteVnfInstance(db, fs, msg, auth)
+
+    def new(self, rollback, session, indata=None, kwargs=None, headers=None):
+        """
+        Creates a new entry into database.
+        :param rollback: list to append created items at database in case a rollback may have to be done
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param indata: data to be inserted
+        :param kwargs: used to override the indata descriptor
+        :param headers: http request headers
+        :return: _id, op_id:
+            _id: identity of the inserted data.
+             op_id: operation id if this is asynchronous, None otherwise
+        """
+        return self.new_vnf_instance.action(rollback, session, indata, kwargs, headers)
+
+    def list(self, session, filter_q=None, api_req=False):
+        """
+        Get a list of the Vnfs that match a filter
+        :param session: contains the used login username and working project
+        :param filter_q: filter of data to be applied
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: The list, it can be empty if no one match the filter.
+        """
+        return self.list_vnf_instance.action(session, filter_q, api_req)
+
+    def show(self, session, _id, api_req=False):
+        """
+        Get complete information on an Vnf
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param _id: server internal id
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: dictionary, raise exception if not found.
+        """
+        return self.show_vnf_instance.action(session, _id, api_req)
+
+    def delete(self, session, _id, dry_run=False, not_send_msg=None):
+        """
+        Delete item by its internal _id
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param _id: server internal id
+        :param dry_run: make checking but do not delete
+        :param not_send_msg: To not send message (False) or store content (list) instead
+        :return: operation id (None if there is not operation), raise exception if error or not found, conflict, ...
+        """
+        return self.delete_vnf_instance.action(session, _id, dry_run, not_send_msg)
+
+
+class NewVnfInstance(BaseMethod):
+    # sample ns descriptor
+    sample_nsd = {
+        "nsd": {
+            "nsd": [
+                {
+                    "df": [
+                        {
+                            "id": "default-df",
+                            "vnf-profile": [
+                                {
+                                    "id": 1,
+                                    "virtual-link-connectivity": [
+                                        {
+                                            "constituent-cpd-id": [
+                                                {
+                                                    "constituent-base-element-id": 1,
+                                                    "constituent-cpd-id": "eth0-ext",
+                                                }
+                                            ],
+                                            "virtual-link-profile-id": "mgmtnet",
+                                        }
+                                    ],
+                                    "vnfd-id": "cirros_vnfd",
+                                }
+                            ],
+                        }
+                    ],
+                    "vnfd-id": ["cirros_vnfd"],
+                    "description": "Generated by OSM pacakage generator",
+                    "id": "cirros_2vnf_nsd",
+                    "name": "cirros_2vnf_ns",
+                    "short-name": "cirros_2vnf_ns",
+                    "vendor": "OSM",
+                    "version": "1.0",
+                }
+            ]
+        }
+    }
+
+    @staticmethod
+    def __get_formatted_indata(indata, nsd_id):
+        """
+        Create indata for nsd_id
+        :param indata: Contains unformatted data for new vnf instance
+        :param nsd_id: Id of nsd
+        :return: formatted indata for nsd_id
+        """
+        formatted_indata = deepcopy(indata)
+        formatted_indata["nsdId"] = nsd_id
+        formatted_indata["nsName"] = indata["vnfInstanceName"] + "-ns"
+        for invalid_key in (
+            "vnfdId",
+            "vnfInstanceName",
+            "vnfInstanceDescription",
+            "additionalParams",
+        ):
+            formatted_indata.pop(invalid_key)
+        return formatted_indata
+
+    def __init__(self, db, fs, msg, auth):
+        """
+        Constructor for new vnf instance
+        """
+        super().__init__()
+        self.msg = msg
+        self.nsdtopic = NsdTopic(db, fs, msg, auth)
+        self.nsrtopic = NsrTopic(db, fs, msg, auth)
+
+    def __get_vnfd(self):
+        # get vnfd from nfvo
+        pass
+
+    def __onboard_vnfd(self):
+        self.__get_vnfd()
+        pass
+
+    def __create_nsd(self, rollback, session, indata=None, kwargs=None, headers=None):
+        """
+        Creates new ns descriptor from a vnfd.
+        :param rollback: list to append the created items at database in case a rollback must be done
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param indata: params to be used for the nsr
+        :param kwargs: used to override the indata
+        :param headers: http request headers
+        :return: id of new nsd created
+        """
+        _id, *others = self.nsdtopic.new(rollback, session, {}, None, headers)
+        new_nsd = deepcopy(NewVnfInstance.sample_nsd)
+        vnf_content = {
+            "id": "default-df",
+            "vnf-profile": [
+                {
+                    "id": "1",
+                    "virtual-link-connectivity": [
+                        {
+                            "constituent-cpd-id": [
+                                {
+                                    "constituent-base-element-id": "1",
+                                    "constituent-cpd-id": indata["additionalParams"][
+                                        "constituent-cpd-id"
+                                    ],
+                                }
+                            ],
+                            "virtual-link-profile-id": indata["additionalParams"][
+                                "virtual-link-profile-id"
+                            ],
+                        }
+                    ],
+                    "vnfd-id": indata["vnfdId"],
+                }
+            ],
+        }
+        vnf_profile = vnf_content["vnf-profile"][0]
+        virtual_link_connectivity = vnf_profile["virtual-link-connectivity"][0]
+        constituent_cpd_id = virtual_link_connectivity["constituent-cpd-id"][0]
+        if "ip-address" in indata["additionalParams"]:
+            constituent_cpd_id["ip-address"] = indata["additionalParams"]["ip-address"]
+        new_nsd["nsd"]["nsd"][0] = {
+            "description": indata["vnfInstanceDescription"],
+            "designer": "OSM",
+            "id": indata["vnfdId"] + "-ns",
+            "name": indata["vnfdId"] + "-ns",
+            "version": "1.0",
+            "df": [
+                vnf_content,
+            ],
+            "virtual-link-desc": indata["additionalParams"]["virtual-link-desc"],
+            "vnfd-id": [indata["vnfdId"]],
+        }
+        return _id, new_nsd
+
+    def __create_nsr(self, rollback, session, indata=None, kwargs=None, headers=None):
+        """
+        Creates an new ns record in database
+        :param rollback: list to append the created items at database in case a rollback must be done
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param indata: params to be used for the nsr
+        :param kwargs: used to override the indata
+        :param headers: http request headers
+        :return: id of new nsr
+        """
+        return self.nsrtopic.new(rollback, session, indata, kwargs, headers)
+
+    def __action_pre_processing(
+        self, rollback, session, indata=None, kwargs=None, headers=None
+    ):
+        """
+        Pre process for creating new vnf instance
+        :param rollback: list to append the created items at database in case a rollback must be done
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param indata: params to be used for the nsr
+        :param kwargs: used to override the indata
+        :param headers: http request headers
+        :return: id nsr
+        """
+        self.__onboard_vnfd()
+        nsd_id, nsd = self.__create_nsd(rollback, session, indata, kwargs, headers)
+        self.nsdtopic.upload_content(session, nsd_id, nsd, kwargs, headers)
+        formatted_indata = NewVnfInstance.__get_formatted_indata(indata, nsd_id)
+        nsr_id, _ = self.__create_nsr(
+            rollback, session, formatted_indata, kwargs, headers
+        )
+        nsr = self.nsrtopic.show(session, nsr_id)
+        vnfr_id = nsr["constituent-vnfr-ref"][0]
+        if vnfr_id:
+            links = {"vnfInstance": "/osm/vnflcm/v1/vnf_instances/" + vnfr_id}
+            indata["vnfInstanceId"] = vnfr_id
+            indata["_links"] = links
+            self.msg.write("vnf", "create", indata)
+        return vnfr_id, None
+
+    def action(self, rollback, session, indata=None, kwargs=None, headers=None):
+        """
+        Creates an new vnf instance
+        :param rollback: list to append the created items at database in case a rollback must be done
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param indata: params to be used for the nsr
+        :param kwargs: used to override the indata
+        :param headers: http request headers
+        :return: id of new vnf instance
+        """
+        return self.__action_pre_processing(rollback, session, indata, kwargs, headers)
+
+
+class ListVnfInstance(BaseMethod):
+    def __init__(self, db, fs, msg, auth):
+        """
+        Constructor call for listing vnfs
+        """
+        super().__init__()
+        self.vnfrtopic = VnfrTopic(db, fs, msg, auth)
+
+    def action(self, session, filter_q=None, api_req=False):
+        """
+        To get list of vnfs that matches a filter
+        :param session: contains the used login username and working project
+        :param filter_q: filter of data to be applied
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: The list, it can be empty if no one match the filter.
+        """
+        return self.vnfrtopic.list(session, filter_q, api_req)
+
+
+class ShowVnfInstance(BaseMethod):
+    def __init__(self, db, fs, msg, auth):
+        """
+        Constructor call for showing vnf lcm operation
+        """
+        super().__init__()
+        self.vnfrtopic = VnfrTopic(db, fs, msg, auth)
+
+    def action(self, session, _id, api_req=False):
+        """
+        Get complete information on an Vnf Lcm Operation.
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param _id: Vnf Lcm operation id
+        :param api_req: True if this call is serving an external API request. False if serving internal request.
+        :return: dictionary, raise exception if not found.
+        """
+        return self.vnfrtopic.show(session, _id, api_req)
+
+
+class DeleteVnfInstance(BaseMethod):
+    def __init__(self, db, fs, msg, auth):
+        """
+        Constructor call for deleting vnf
+        """
+        super().__init__()
+        self.msg = msg
+        self.nsrtopic = NsrTopic(db, fs, msg, auth)
+        self.nsdtopic = NsdTopic(db, fs, msg, auth)
+        self.vnfrtopic = VnfrTopic(db, fs, msg, auth)
+
+    def action(self, session, _id, dry_run=False, not_send_msg=None):
+        """
+        Delete vnf instance by its internal _id
+        :param session: contains "username", "admin", "force", "public", "project_id", "set_project"
+        :param _id: server internal id
+        :param dry_run: make checking but do not delete
+        :param not_send_msg: To not send message (False) or store content (list) instead
+        :return: operation id (None if there is not operation), raise exception if error or not found, conflict, ...
+        """
+        vnfInstanceId = _id
+        vnfr = self.vnfrtopic.show(session, vnfInstanceId)
+        ns_id = vnfr.get("nsr-id-ref")
+        nsr = self.nsrtopic.show(session, ns_id)
+        nsd_to_del = nsr["nsd"]["_id"]
+        links = {"vnfInstance": "/osm/vnflcm/v1/vnf_instances/" + _id}
+        params = {"vnfdId": vnfr["vnfd-ref"], "vnfInstanceId": _id, "_links": links}
+        self.msg.write("vnf", "delete", params)
+        self.nsrtopic.delete(session, ns_id, dry_run, not_send_msg)
+        return self.nsdtopic.delete(session, nsd_to_del, dry_run, not_send_msg)

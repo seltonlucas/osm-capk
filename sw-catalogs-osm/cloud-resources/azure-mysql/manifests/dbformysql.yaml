@@ -1,0 +1,97 @@
+#######################################################################################
+# Copyright ETSI Contributors and Others.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#######################################################################################
+
+---
+apiVersion: dbformysql.azure.upbound.io/v1beta1
+kind: Database
+metadata:
+  # annotations:
+  #   meta.upbound.io/example-id: dbformysql/v1beta1/database
+  labels:
+    testing.upbound.io/name: ${database_name}
+  name: ${database_name}
+spec:
+  forProvider:
+    charset: utf8
+    collation: utf8_unicode_ci
+    resourceGroupName: ${resource_group}
+    # resourceGroupNameSelector:
+    #   matchLabels:
+    #     testing.upbound.io/name: ${database_name}
+    serverNameSelector:
+      matchLabels:
+        testing.upbound.io/name: ${database_name}
+
+---
+
+apiVersion: dbformysql.azure.upbound.io/v1beta1
+kind: Server
+metadata:
+  # annotations:
+  #   meta.upbound.io/example-id: dbformysql/v1beta1/database
+  labels:
+    testing.upbound.io/name: ${database_name}
+  name: server-${database_name}
+spec:
+  forProvider:
+    administratorLogin: ${admin_user}
+    administratorLoginPasswordSecretRef:
+      key: key
+      name: ${database_secret_name}
+      namespace: ${database_secret_namespace}
+    autoGrowEnabled: true
+    backupRetentionDays: 7
+    geoRedundantBackupEnabled: true
+    infrastructureEncryptionEnabled: true
+    location: ${region}
+    publicNetworkAccessEnabled: false
+    resourceGroupName: ${resource_group}
+    # resourceGroupNameSelector:
+    #   matchLabels:
+    #     testing.upbound.io/name: ${database_name}
+    # skuName: GP_Gen5_2
+    skuName: ${sku_name:=GP_Gen5_2}
+    sslEnforcementEnabled: true
+    sslMinimalTlsVersionEnforced: TLS1_2
+    # storageMb: 5120
+    storageMb: ${storage_mb:=5120}
+    version: "5.7"
+
+# ---
+
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: example-secret
+#   namespace: upbound-system
+# type: Opaque
+# stringData:
+#   example-key: dGVzdFBhc3N3b3JkITEyMw==
+
+# ---
+
+# apiVersion: azure.upbound.io/v1beta1
+# kind: ResourceGroup
+# metadata:
+#   annotations:
+#     meta.upbound.io/example-id: dbformysql/v1beta1/database
+#   labels:
+#     testing.upbound.io/name: ${database_name}
+#   name: ${database_name}
+# spec:
+#   forProvider:
+#     location: West Europe
