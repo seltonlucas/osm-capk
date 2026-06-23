@@ -3,8 +3,8 @@
 Provision CAPK clusters as OSM-owned clusters via `osm cluster-create`. Cluster API runs on
 the OSM management cluster and creates nodes as KubeVirt VMs.
 
-Each subdirectory is a fork; the exact diff vs upstream is in [`CHANGES/`](CHANGES):
-`LCM` & `NBI` vs `v19.0`, `osm-krm-functions` vs `master`, `sw-catalogs-osm` vs its pre-CAPK base.
+Each subdirectory is a fork: `LCM` & `NBI` from `v19.0`, `osm-krm-functions` from `master`,
+`sw-catalogs-osm` from its pre-CAPK base.
 
 ## Prerequisites
 
