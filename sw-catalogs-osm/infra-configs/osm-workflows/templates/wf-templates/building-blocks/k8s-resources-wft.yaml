@@ -74,20 +74,52 @@ spec:
       source: |
         set -euo pipefail
 
-        echo "Waiting for CAPI cluster {{inputs.parameters.cluster_name}} in namespace {{inputs.parameters.cluster_namespace}} to reach Provisioned phase..."
-        kubectl wait cluster/{{inputs.parameters.cluster_name}} \
-          -n {{inputs.parameters.cluster_namespace}} \
-          --for=jsonpath='{.status.phase}'=Provisioned \
-          --timeout={{inputs.parameters.timeout}}
+        CLUSTER="{{inputs.parameters.cluster_name}}"
+        NS="{{inputs.parameters.cluster_namespace}}"
+        SRC="{{inputs.parameters.source_secret_name}}"
+        TGT_NS="{{inputs.parameters.target_namespace}}"
+        TGT="{{inputs.parameters.target_secret_name}}"
+        TIMEOUT="{{inputs.parameters.timeout}}"
 
-        echo "Cluster provisioned. Copying kubeconfig secret..."
-        KUBECONFIG_DATA=$(kubectl get secret {{inputs.parameters.source_secret_name}} \
-          -n {{inputs.parameters.cluster_namespace}} \
-          -o jsonpath='{.data.value}')
+        # Convert timeout (Nm / Ns / N) to an absolute deadline in epoch seconds.
+        case "${TIMEOUT}" in
+          *m) DEADLINE=$(( $(date +%s) + ${TIMEOUT%m} * 60 )) ;;
+          *s) DEADLINE=$(( $(date +%s) + ${TIMEOUT%s} )) ;;
+          *)  DEADLINE=$(( $(date +%s) + ${TIMEOUT} )) ;;
+        esac
 
-        kubectl create secret generic {{inputs.parameters.target_secret_name}} \
-          --from-literal=value="$(echo "${KUBECONFIG_DATA}" | base64 -d)" \
-          -n {{inputs.parameters.target_namespace}} \
-          --dry-run=client -o yaml | kubectl apply -f -
+        # 1. Wait for the Cluster object to EXIST. Flux may not have applied the CAPI
+        #    manifests yet when this step starts, and `kubectl wait` errors out
+        #    immediately (exit 1) on a missing object instead of waiting -> the race
+        #    that used to fail this step. Poll for existence first.
+        echo "Waiting for Cluster ${CLUSTER} (ns ${NS}) to exist..."
+        until kubectl get "cluster/${CLUSTER}" -n "${NS}" >/dev/null 2>&1; do
+          if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
+            echo "Timed out waiting for Cluster ${CLUSTER} to be created"; exit 1
+          fi
+          sleep 10
+        done
 
-        echo "Done: {{inputs.parameters.target_namespace}}/{{inputs.parameters.target_secret_name}} is ready."
+        # 2. Wait for it to reach the Provisioned phase (bounded by remaining time).
+        REMAIN=$(( DEADLINE - $(date +%s) )); [ "${REMAIN}" -lt 1 ] && REMAIN=1
+        echo "Waiting for ${CLUSTER} to reach Provisioned (up to ${REMAIN}s)..."
+        kubectl wait "cluster/${CLUSTER}" -n "${NS}" \
+          --for=jsonpath='{.status.phase}'=Provisioned --timeout="${REMAIN}s"
+
+        # 3. Wait for the kubeconfig secret to EXIST (CAPI creates it once the control
+        #    plane is up; it can lag the Provisioned phase slightly).
+        echo "Waiting for kubeconfig secret ${SRC}..."
+        until kubectl get "secret/${SRC}" -n "${NS}" >/dev/null 2>&1; do
+          if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
+            echo "Timed out waiting for secret ${SRC}"; exit 1
+          fi
+          sleep 10
+        done
+
+        # 4. Copy it into the target namespace for the Flux Kustomizations.
+        echo "Copying kubeconfig secret to ${TGT_NS}/${TGT}..."
+        kubectl get "secret/${SRC}" -n "${NS}" -o jsonpath='{.data.value}' | base64 -d > /tmp/kubeconfig
+        kubectl create secret generic "${TGT}" --from-file=value=/tmp/kubeconfig \
+          -n "${TGT_NS}" --dry-run=client -o yaml | kubectl apply -f -
+
+        echo "Done: ${TGT_NS}/${TGT} is ready."

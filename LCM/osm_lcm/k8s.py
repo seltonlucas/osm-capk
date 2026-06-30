@@ -362,12 +362,6 @@ class ClusterLcm(GitOpsLcm):
             "delete_cluster": {
                 "check_resource_function": self.check_delete_cluster,
             },
-            "deregister_cluster": {
-                "check_resource_function": self.check_deregister_cluster,
-            },
-            "purge_cluster": {
-                "check_resource_function": self.check_purge_cluster,
-            },
         }
         self.regist = vim_sdn.K8sClusterLcm(msg, self.lcm_tasks, config)
 
@@ -593,6 +587,62 @@ class ClusterLcm(GitOpsLcm):
                     "resourceState": "IN_PROGRESS.BOOTSTRAP_OK",
                 },
             ]
+        elif cloud_type == "kubevirt":
+            # CAPK (Cluster API + KubeVirt): the workload cluster provisions
+            # asynchronously (kubeadm + CNI take ~10-15 min). The cni/postinstall
+            # Kustomizations only reach Ready once the workload API is reachable
+            # and the manifests apply, so waiting on them makes this check wait
+            # for the cluster to be genuinely up instead of returning immediately.
+            checkings_list = [
+                {
+                    "item": "kustomization",
+                    "name": cluster_kustomization_name,
+                    "namespace": "managed-resources",
+                    "condition": {
+                        "jsonpath_filter": "status.conditions[?(@.type=='Ready')].status",
+                        "value": "True",
+                    },
+                    "timeout": 1500,
+                    "enable": True,
+                    "resourceState": "IN_PROGRESS.KUSTOMIZATION_READY",
+                },
+                {
+                    "item": "kustomization",
+                    "name": f"{cluster_kustomization_name}-cni",
+                    "namespace": "managed-resources",
+                    "condition": {
+                        "jsonpath_filter": "status.conditions[?(@.type=='Ready')].status",
+                        "value": "True",
+                    },
+                    "timeout": 1500,
+                    "enable": True,
+                    "resourceState": "IN_PROGRESS.CNI_READY",
+                },
+                {
+                    "item": "kustomization",
+                    "name": f"{cluster_kustomization_name}-postinstall",
+                    "namespace": "managed-resources",
+                    "condition": {
+                        "jsonpath_filter": "status.conditions[?(@.type=='Ready')].status",
+                        "value": "True",
+                    },
+                    "timeout": 1500,
+                    "enable": True,
+                    "resourceState": "IN_PROGRESS.POSTINSTALL_READY",
+                },
+                {
+                    "item": "kustomization",
+                    "name": f"{cluster_kustomization_name}-bstrp-fluxctrl",
+                    "namespace": "managed-resources",
+                    "condition": {
+                        "jsonpath_filter": "status.conditions[?(@.type=='Ready')].status",
+                        "value": "True",
+                    },
+                    "timeout": 1500,
+                    "enable": bootstrap,
+                    "resourceState": "IN_PROGRESS.BOOTSTRAP_OK",
+                },
+            ]
         else:
             return False, "Not suitable VIM account to check cluster status"
         if cloud_type != "aws":
@@ -802,6 +852,20 @@ class ClusterLcm(GitOpsLcm):
                     "timeout": self._checkloop_resource_timeout,
                     "enable": True,
                     "resourceState": "IN_PROGRESS.RESOURCE_DELETED.CLUSTER",
+                },
+            ]
+        elif cloud_type == "kubevirt":
+            # CAPK delete: OSM prunes the base Kustomization, which removes the
+            # CAPI Cluster and all KubeVirt VMs. Readiness = that Kustomization gone.
+            checkings_list = [
+                {
+                    "item": "kustomization",
+                    "name": cluster_kustomization_name,
+                    "namespace": "managed-resources",
+                    "deleted": True,
+                    "timeout": self._checkloop_kustomization_timeout,
+                    "enable": True,
+                    "resourceState": "IN_PROGRESS.KUSTOMIZATION_DELETED",
                 },
             ]
         else:
@@ -1168,50 +1232,6 @@ class ClusterLcm(GitOpsLcm):
             op_id, checkings_list, "clusters", db_cluster
         )
 
-    async def check_deregister_cluster(self, op_id, op_params, content):
-        self.logger.info(
-            f"check_deregister_cluster Operation {op_id}. Params: {op_params}."
-        )
-        # self.logger.debug(f"Content: {content}")
-        db_cluster = content["cluster"]
-        cluster_name = db_cluster["git_name"].lower()
-        cluster_kustomization_name = cluster_name
-        checkings_list = [
-            {
-                "item": "kustomization",
-                "name": f"{cluster_kustomization_name}-bstrp-fluxctrl",
-                "namespace": "managed-resources",
-                "deleted": True,
-                "timeout": self._checkloop_kustomization_timeout,
-                "enable": True,
-                "resourceState": "IN_PROGRESS.CLUSTER_DISCONNECTED",
-            },
-        ]
-        return await self.common_check_list(
-            op_id, checkings_list, "clusters", db_cluster
-        )
-
-    async def check_purge_cluster(self, op_id, op_params, content):
-        self.logger.info(f"check_purge_cluster Operation {op_id}. Params: {op_params}.")
-        # self.logger.debug(f"Content: {content}")
-        db_cluster = content["cluster"]
-        cluster_name = db_cluster["git_name"].lower()
-        cluster_kustomization_name = cluster_name
-        checkings_list = [
-            {
-                "item": "kustomization",
-                "name": cluster_kustomization_name,
-                "namespace": "managed-resources",
-                "deleted": True,
-                "timeout": self._checkloop_kustomization_timeout,
-                "enable": True,
-                "resourceState": "IN_PROGRESS.CLUSTER_DEREGISTERED",
-            },
-        ]
-        return await self.common_check_list(
-            op_id, checkings_list, "clusters", db_cluster
-        )
-
     async def deregister(self, params, order_id):
         self.logger.info("cluster deregister enter")
 
@@ -1285,104 +1305,14 @@ class ClusterLcm(GitOpsLcm):
         )
         self.db.set_one("clusters", {"_id": db_cluster["_id"]}, db_cluster)
 
-        # Clean items used in the workflow, no matter if the workflow succeeded
+        await self.delete(params, order_id)
+        # Clean items used in the workflow or in the cluster, no matter if the workflow succeeded
         clean_status, clean_msg = await self.odu.clean_items_workflow(
             "deregister_cluster", op_id, op_params, workflow_content
         )
         self.logger.info(
             f"clean_status is :{clean_status} and clean_msg is :{clean_msg}"
         )
-        if not workflow_status or not resource_status:
-            return
-
-        # Now, we launch the workflow to purge the cluster
-        # Initialize the operation again
-        self.initialize_operation(cluster_id, op_id)
-        workflow_res, workflow_name, _ = await self.odu.launch_workflow(
-            "purge_cluster", op_id, op_params, workflow_content
-        )
-        if not workflow_res:
-            self.logger.error(f"Failed to launch workflow: {workflow_name}")
-            db_cluster["state"] = "FAILED_DELETION"
-            db_cluster["resourceState"] = "ERROR"
-            db_cluster = self.update_operation_history(
-                db_cluster, op_id, workflow_status=False, resource_status=None
-            )
-            self.db.set_one("clusters", {"_id": db_cluster["_id"]}, db_cluster)
-            # Clean items used in the workflow, no matter if the workflow succeeded
-            clean_status, clean_msg = await self.odu.clean_items_workflow(
-                "purge_cluster", op_id, op_params, workflow_content
-            )
-            self.logger.info(
-                f"clean_status is :{clean_status} and clean_msg is :{clean_msg}"
-            )
-            return
-
-        self.logger.info("workflow_name is: {}".format(workflow_name))
-        workflow_status, workflow_msg = await self.odu.check_workflow_status(
-            op_id, workflow_name
-        )
-        self.logger.info(
-            "workflow_status is: {} and workflow_msg is: {}".format(
-                workflow_status, workflow_msg
-            )
-        )
-        if workflow_status:
-            db_cluster["state"] = "DELETED"
-            db_cluster["resourceState"] = "IN_PROGRESS.GIT_SYNCED"
-        else:
-            db_cluster["state"] = "FAILED_DELETION"
-            db_cluster["resourceState"] = "ERROR"
-        # has to call update_operation_history return content
-        db_cluster = self.update_operation_history(
-            db_cluster, op_id, workflow_status, None
-        )
-        self.db.set_one("clusters", {"_id": db_cluster["_id"]}, db_cluster)
-
-        # Clean items used in the workflow or in the cluster, no matter if the workflow succeeded
-        clean_status, clean_msg = await self.odu.clean_items_workflow(
-            "purge_cluster", op_id, op_params, workflow_content
-        )
-        self.logger.info(
-            f"clean_status is :{clean_status} and clean_msg is :{clean_msg}"
-        )
-
-        if workflow_status:
-            resource_status, resource_msg = await self.check_resource_status(
-                "purge_cluster", op_id, op_params, workflow_content
-            )
-            self.logger.info(
-                "resource_status is :{} and resource_msg is :{}".format(
-                    resource_status, resource_msg
-                )
-            )
-            if resource_status:
-                db_cluster["resourceState"] = "READY"
-            else:
-                db_cluster["resourceState"] = "ERROR"
-
-        db_cluster["operatingState"] = "IDLE"
-        db_cluster = self.update_operation_history(
-            db_cluster, op_id, workflow_status, resource_status
-        )
-        db_cluster["current_operation"] = None
-        self.db.set_one("clusters", {"_id": db_cluster["_id"]}, db_cluster)
-
-        force = params.get("force", False)
-        if force:
-            force_delete_status = self.check_force_delete_and_delete_from_db(
-                cluster_id, workflow_status, resource_status, force
-            )
-            if force_delete_status:
-                return
-
-        # To delete it from DB
-        if db_cluster["state"] == "DELETED":
-            self.delete_cluster(db_cluster)
-
-        # To delete it from k8scluster collection
-        self.db.del_one("k8sclusters", {"name": db_cluster["name"]})
-
         return
 
     async def get_creds(self, params, order_id):

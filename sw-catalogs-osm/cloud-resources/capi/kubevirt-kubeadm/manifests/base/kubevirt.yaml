@@ -105,9 +105,12 @@ spec:
   kubeadmConfigSpec:
     clusterConfiguration:
       apiServer:
-        # Default api-check timeout is 4m; etcd slow-start in KubeVirt VMs can
-        # exceed that, causing kubeadm to exit before the post-init phases run
-        # (upload-config, mark-control-plane, bootstrap-token, addon).
+        # This is the apiserver's own timeout, NOT the kubeadm [api-check] 4m
+        # health-wait. The bootstrap kube-proxy static Pod below is what lets that
+        # health-wait pass: controlPlaneEndpoint is a kube-proxy-dependent
+        # LoadBalancer, so without an early kube-proxy [api-check] times out and
+        # the post-init phases (upload-config, mark-control-plane, bootstrap-token,
+        # addon) never run -> KCP stuck WaitingForKubeadmInit.
         timeoutForControlPlane: 15m0s
       networking:
         dnsDomain: ${cluster_name}.${namespace}.local
@@ -119,6 +122,83 @@ spec:
     joinConfiguration:
       nodeRegistration:
         criSocket: /var/run/containerd/containerd.sock
+    # One-shot bootstrap kube-proxy: kubelet starts static Pods before kubeadm's
+    # [api-check], and this one bootstraps via the LOCAL apiserver (127.0.0.1, by
+    # rewriting admin.conf's server) and programs all Service rules incl the
+    # control-plane LoadBalancer -> the endpoint becomes routable -> [api-check]
+    # passes -> kubeadm finishes init on its own (incl the standard kube-proxy +
+    # CoreDNS addons). postKubeadmCommands then removes it so it doesn't duplicate
+    # the addon DaemonSet.
+    files:
+      - path: /var/lib/kube-proxy-bootstrap/config.conf
+        owner: root:root
+        permissions: "0644"
+        content: |
+          apiVersion: kubeproxy.config.k8s.io/v1alpha1
+          kind: KubeProxyConfiguration
+          bindAddress: 0.0.0.0
+          clientConnection:
+            kubeconfig: /var/lib/kube-proxy-bootstrap/kubeconfig.conf
+          clusterCIDR: ${pod_cidr}
+          mode: ""
+      - path: /etc/kubernetes/manifests/kube-proxy-bootstrap.yaml
+        owner: root:root
+        permissions: "0600"
+        content: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: kube-proxy-bootstrap
+            namespace: kube-system
+          spec:
+            hostNetwork: true
+            priorityClassName: system-node-critical
+            tolerations:
+              - operator: Exists
+            containers:
+              - name: kube-proxy
+                image: registry.k8s.io/kube-proxy:${kubernetes_version}
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    until [ -f /etc/kubernetes/admin.conf ]; do sleep 1; done
+                    sed 's#server: https://.*#server: https://127.0.0.1:6443#' \
+                      /etc/kubernetes/admin.conf > /var/lib/kube-proxy-bootstrap/kubeconfig.conf
+                    exec kube-proxy --config=/var/lib/kube-proxy-bootstrap/config.conf
+                securityContext:
+                  privileged: true
+                volumeMounts:
+                  - name: kubeadmin
+                    mountPath: /etc/kubernetes/admin.conf
+                    readOnly: true
+                  - name: cfg
+                    mountPath: /var/lib/kube-proxy-bootstrap
+                  - name: xtables
+                    mountPath: /run/xtables.lock
+                  - name: modules
+                    mountPath: /lib/modules
+                    readOnly: true
+            volumes:
+              - name: kubeadmin
+                hostPath: { path: /etc/kubernetes/admin.conf, type: File }
+              - name: cfg
+                hostPath: { path: /var/lib/kube-proxy-bootstrap, type: DirectoryOrCreate }
+              - name: xtables
+                hostPath: { path: /run/xtables.lock, type: FileOrCreate }
+              - name: modules
+                hostPath: { path: /lib/modules, type: Directory }
+    preKubeadmCommands:
+      # Reliability backstop (base64 to survive Flux var-substitution): a
+      # transient systemd service that waits for the local apiserver and, if
+      # kubeadm's [api-check] timed out and skipped the post-init phases
+      # (upload-config/mark-control-plane/bootstrap-token/addon), completes them
+      # so KCP init is deterministic instead of dependent on the timeout.
+      - "echo IyEvYmluL2Jhc2gKIyBDQVBLIHJlbGlhYmlsaXR5IGJhY2tzdG9wOiBjb21wbGV0ZSBrdWJlYWRtIGNvbnRyb2wtcGxhbmUgcG9zdC1pbml0IHBoYXNlcyBldmVuCiMgaWYga3ViZWFkbSdzIFthcGktY2hlY2tdIHRpbWVkIG91dCAoc2xvdyBldGNkL2FwaXNlcnZlcikuIExhdW5jaGVkIGFzIGEgdHJhbnNpZW50CiMgc3lzdGVtZCBzZXJ2aWNlIGZyb20gcHJlS3ViZWFkbUNvbW1hbmRzLCBzbyBpdCBydW5zIGluZGVwZW5kZW50IG9mIGBrdWJlYWRtIGluaXRgLgpzZXQgLXUKQ0ZHPS9ydW4va3ViZWFkbS9rdWJlYWRtLnlhbWwKQURNSU49L2V0Yy9rdWJlcm5ldGVzL2FkbWluLmNvbmYKZWNobyAiW2NhcGstZW5zdXJlLWluaXRdIHdhaXRpbmcgZm9yIGxvY2FsIGFwaXNlcnZlci4uLiIKZm9yIGkgaW4gJChzZXEgMSAyNDApOyBkbwogIFsgIiQoY3VybCAtc2sgLW8gL2Rldi9udWxsIC13ICcle2h0dHBfY29kZX0nIGh0dHBzOi8vMTI3LjAuMC4xOjY0NDMvaGVhbHRoeiAyPi9kZXYvbnVsbCkiID0gIjIwMCIgXSAmJiBicmVhawogIHNsZWVwIDUKZG9uZQojIEdpdmUga3ViZWFkbSBhIGNoYW5jZSB0byBmaW5pc2ggb24gaXRzIG93biBiZWZvcmUgaW50ZXJ2ZW5pbmcuCmZvciBpIGluICQoc2VxIDEgMzYpOyBkbwogIEtVQkVDT05GSUc9JEFETUlOIGt1YmVjdGwgZ2V0IC1uIGt1YmUtc3lzdGVtIGNvbmZpZ21hcCBrdWJlYWRtLWNvbmZpZyA+L2Rldi9udWxsIDI+JjEgJiYgeyBlY2hvICJbY2Fway1lbnN1cmUtaW5pdF0ga3ViZWFkbSBmaW5pc2hlZCBpbml0OyBub3RoaW5nIHRvIGRvIjsgZXhpdCAwOyB9CiAgc2xlZXAgNQpkb25lCmVjaG8gIltjYXBrLWVuc3VyZS1pbml0XSBrdWJlYWRtLWNvbmZpZyBtaXNzaW5nOyBjb21wbGV0aW5nIHBvc3QtaW5pdCBwaGFzZXMiCmZvciBwaCBpbiAidXBsb2FkLWNvbmZpZyBhbGwiICJtYXJrLWNvbnRyb2wtcGxhbmUiICJib290c3RyYXAtdG9rZW4iICJrdWJlbGV0LWZpbmFsaXplIGFsbCIgImFkZG9uIGFsbCI7IGRvCiAgZWNobyAiW2NhcGstZW5zdXJlLWluaXRdIGt1YmVhZG0gaW5pdCBwaGFzZSAkcGgiCiAga3ViZWFkbSBpbml0IHBoYXNlICRwaCAtLWNvbmZpZyAiJENGRyIgfHwgdHJ1ZQpkb25lCnJtIC1mIC9ldGMva3ViZXJuZXRlcy9tYW5pZmVzdHMva3ViZS1wcm94eS1ib290c3RyYXAueWFtbAplY2hvICJbY2Fway1lbnN1cmUtaW5pdF0gZG9uZSIK | base64 -d > /usr/local/bin/capk-ensure-kubeadm-init.sh"
+      - "chmod 0755 /usr/local/bin/capk-ensure-kubeadm-init.sh"
+      - "systemd-run --unit=capk-ensure-kubeadm-init --description=CAPK-ensure-kubeadm-post-init /usr/local/bin/capk-ensure-kubeadm-init.sh"
+    postKubeadmCommands:
+      - rm -f /etc/kubernetes/manifests/kube-proxy-bootstrap.yaml
   machineTemplate:
     infrastructureRef:
       apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
